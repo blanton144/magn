@@ -8,7 +8,7 @@ import argparse
 import matplotlib.pyplot as plt
 import fitsio
 import numpy as np
-import mnsa.jiyan
+import magn.jiyan
 import astropy.cosmology
 import astropy.units
 
@@ -243,12 +243,13 @@ def select_agn(cf=None, cf_ivar=None, good=None):
 """
     detected = good.copy()
     for channel in cf_ivar:
-        detected = (detected & (cf[channel] * np.sqrt(cf_ivar[channel]) > 2.))
+        detected[good] = (detected[good] & (cf[channel][good] *
+                                            np.sqrt(cf_ivar[channel][good]) > 2.))
 
     tmp_n2ha = np.log10(cf['NII-6585'][detected] / cf['Ha-6564'][detected])
     tmp_s2ha = np.log10(cf['SII-6718+6732'][detected] / cf['Ha-6564'][detected])
     tmp_o3hb = np.log10(cf['OIII-5008'][detected] / cf['Hb-4862'][detected])
-    tmp_p1, tmp_p2, tmp_p3 = mnsa.jiyan.ratios_to_pspace(n2ha=tmp_n2ha,
+    tmp_p1, tmp_p2, tmp_p3 = magn.jiyan.ratios_to_pspace(n2ha=tmp_n2ha,
                                                          s2ha=tmp_s2ha,
                                                          o3hb=tmp_o3hb)
     p1 = np.zeros(len(good), dtype=np.float32) - 9999.
@@ -277,23 +278,32 @@ if __name__ == '__main__':
                         action='store_true', default=False,
                         help='debugging plots')
 
+    parser.add_argument('-p', '--plateifu', dest='plateifu',
+                        type=str, default=None, required=False,
+                        help='debug this plate ifu')
+
+    parser.add_argument('-o', '--old', dest='dr17',
+                        required=False, help='dr17',
+                        action='store_true',
+                        default=False)
+
     args = parser.parse_args()
     version = args.version
     debug = args.debug
+    dr17 = args.dr17
+    plateifu = args.plateifu
 
-    summary = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
-                                       '0.3.1', 'mnsa-0.3.1.fits'),
-                          ext='SUMMARY')
-    sps = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
-                                   '0.3.1', 'mnsa-0.3.1.fits'),
-                      ext='SPS_AP04')
-    pipe3d = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
-                                      '0.3.1', 'mnsa-0.3.1.fits'),
-                         ext='PIPE3D')
+    done = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
+                                    '{v}.analysis', 'mnsa-done-{v}.fits').format(v=version))
+    drpall = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
+                                      '{v}', 'manga', 'redux', '{v}',
+                                      'drpall-{v}.fits').format(v=version))
 
     cffile = os.path.join(os.getenv('MNSA_DATA'), version + '.analysis',
                           'central_flux',
                           'central-flux-{version}.fits'.format(version=version))
+    if(dr17):
+        cffile = cffile.replace('central-flux-', 'central-flux-dr17-')
     central_flux = fitsio.read(cffile, ext='FLUXES')
     channels = fitsio.read(cffile, ext='CHANNELS_EMLINE_GFLUX')
 
@@ -311,8 +321,8 @@ if __name__ == '__main__':
         cf_nbad[channel] = central_flux['central_emline_gflux_nbad'][:, ichannel[channel]]
     cf['SII-6718+6732'] = cf['SII-6718'] + cf['SII-6732']
 
-    good = np.ones(len(summary), dtype=bool)
-    good = good & (sps['redshift'] > 0)
+    good = np.ones(len(done), dtype=bool)
+    good = good & (drpall['z'] > 0)
     for channel in ichannel:
         good = (good & (cf_ivar[channel] > 0.) & (cf_nbad[channel] < 4))
 
@@ -320,8 +330,10 @@ if __name__ == '__main__':
 
     # Find our AGN
     iagn = np.where(isagn)[0]
+
+    # Determine fluxes
     log_agn_flux_o3 = np.log10(cf['OIII-5008'][iagn])
-    logterm = log_flux_to_luminosity(redshift=sps['redshift'][iagn])
+    logterm = log_flux_to_luminosity(redshift=drpall['z'][iagn])
     log_agn_luminosity_o3 = log_agn_flux_o3 + logterm
 
     # Find typical line ratios relative to OIII
@@ -340,7 +352,7 @@ if __name__ == '__main__':
     agn_ratios['Hb-4862'] = np.median(hbo3)
 
     ilimit = np.where((good) & (isagn == False))[0]
-    log_agn_luminosity_o3_limit = np.zeros(len(summary), dtype=np.float32)
+    log_agn_luminosity_o3_limit = np.zeros(len(done), dtype=np.float32)
     for i in ilimit:
         ccf = dict()
         for k in cf:
@@ -348,13 +360,14 @@ if __name__ == '__main__':
         ccf_ivar = dict()
         for k in cf_ivar:
             ccf_ivar[k] = cf_ivar[k][i:i + 1]
-        log_agn_luminosity_o3_limit[i] = find_o3_limit(redshift=sps['redshift'][i:i + 1],
+        log_agn_luminosity_o3_limit[i] = find_o3_limit(redshift=drpall['z'][i:i + 1],
                                                        cf=ccf,
                                                        cf_ivar=ccf_ivar,
                                                        agn_ratios=agn_ratios)
-        if(debug):
+        if(debug & ((plateifu is None) |
+                    (plateifu == drpall['plateifu'][i]))):
             plt.scatter(p1[detected], p3[detected], s=1, color='grey')
-            plot_o3_limit(redshift=sps['redshift'][i:i + 1],
+            plot_o3_limit(redshift=drpall['z'][i:i + 1],
                           cf=ccf, cf_ivar=ccf_ivar,
                           agn_ratios=agn_ratios)
             xmin = - 1.25
@@ -363,11 +376,13 @@ if __name__ == '__main__':
             ymax = 1.35
             plt.xlim([xmin, xmax])
             plt.ylim([ymin, ymax])
-            logterm = log_flux_to_luminosity(redshift=sps['redshift'][i])
+            logterm = log_flux_to_luminosity(redshift=drpall['z'][i])
             ol = np.log10(cf['OIII-5008'][i]) + logterm
             plt.title('ol={ol} logl={logl}'.format(ol=ol,
                                                    logl=log_agn_luminosity_o3_limit[i]))
-            plt.show()
+            plt.savefig('debug.png')
+
+            sys.exit()
 
     agn_dtype = np.dtype([('plateifu', str, 20),
                           ('isagn', bool),
@@ -379,8 +394,8 @@ if __name__ == '__main__':
                           ('log_luminosity_o3', np.float32),
                           ('log_luminosity_o3_limit', np.float32)])
 
-    agn = np.zeros(len(summary), dtype=agn_dtype)
-    agn['plateifu'] = summary['plateifu']
+    agn = np.zeros(len(done), dtype=agn_dtype)
+    agn['plateifu'] = done['plateifu']
     agn['isagn'][iagn] = True
     agn['good'] = good
     agn['detected'] = detected
@@ -393,7 +408,9 @@ if __name__ == '__main__':
     agn['log_luminosity_o3_limit'][ilimit] = log_agn_luminosity_o3_limit[ilimit]
 
     agnfile = os.path.join(os.getenv('MNSA_DATA'),
-                           version + '.analysis', 'jiyan-agn',
-                           'jiyan-agn-{v}.fits')
+                           version + '.analysis', 'agn',
+                           'jiyan', 'jiyan-agn-{v}.fits')
+    if(dr17):
+        agnfile = agnfile.replace('agn-', 'agn-dr17-')
     agnfile = agnfile.format(v=version)
     fitsio.write(agnfile, agn, clobber=True)
