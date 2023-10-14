@@ -7,19 +7,20 @@ import scipy.interpolate
 import fitsio
 
 
-def ratios_to_pspace(n2ha=None, s2ha=None, o3hb=None):
+def ratios_to_pspace(n2ha=None, s2ha=None, o3hb=None,
+                     n2ha_err=None, s2ha_err=None, o3hb_err=None):
     """Converts log line ratios to Ji & Yan P1/P2/P3 space
 
     Parameters
     ----------
 
-    n2ha : np.float32 or ndarray of np.float32
+    n2ha, n2ha_err : np.float32 or ndarray of np.float32
         log [NII] 6583 / H-alpha flux ratio
 
-    s2ha : np.float32 or ndarray of np.float32
+    s2ha, s2ha_err : np.float32 or ndarray of np.float32
         log ([SII] 6716 + 6730) / H-alpha flux ratio
 
-    o2hb : np.float32 or ndarray of np.float32
+    o3hb, o3hb_err : np.float32 or ndarray of np.float32
         log ([OIII] 5008) / H-beta flux ratio
 
     Returns
@@ -33,11 +34,28 @@ def ratios_to_pspace(n2ha=None, s2ha=None, o3hb=None):
 
     p3 : np.float32 or ndarray of np.float32
         P3 component (ionization-ish?)
+
+    p1_err : np.float32 or ndarray of np.float32
+        error in P1 component (SF or AGN-ness)
+
+    p2_err : np.float32 or ndarray of np.float32
+        error in P2 component (metallicity-ish)
+
+    p3_err : np.float32 or ndarray of np.float32
+        error in P3 component (ionization-ish?)
 """
     p1 = 0.63 * n2ha + 0.51 * s2ha + 0.59 * o3hb
     p2 = - 0.63 * n2ha + 0.78 * s2ha
     p3 = - 0.46 * n2ha - 0.37 * s2ha + 0.81 * o3hb
-    return(p1, p2, p3)
+    p1_err = np.sqrt(0.63**2 * n2ha_err**2 +
+                     0.51**2 * s2ha_err**2 +
+                     0.59**2 * o3hb_err**2)
+    p2_err = np.sqrt(0.63**2 * n2ha_err**2 +
+                     0.78**2 * s2ha_err**2)
+    p3_err = np.sqrt(0.46**2 * n2ha_err**2 +
+                     0.37**2 * s2ha_err**2 +
+                     0.81**2 * o3hb_err**2)
+    return(p1, p2, p3, p1_err, p2_err, p3_err)
 
 
 class JiYan(object):

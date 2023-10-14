@@ -70,14 +70,8 @@ def would_be_agn(redshift=None, cf=None, cf_ivar=None, agn_ratios=None,
     isagn : ndarray of bool
         is this an identified AGN
 
-    p1 : ndarray of np.float32
-        P1 component of Ji & Yan space
-
-    p2 : ndarray of np.float32
-        P2 component of Ji & Yan space
-
-    p3 : ndarray of np.float32
-        P3 component of Ji & Yan space
+    lines : ndarray
+        lines structure returned by select_agn()
 
     Notes
     -----
@@ -94,8 +88,8 @@ def would_be_agn(redshift=None, cf=None, cf_ivar=None, agn_ratios=None,
     ncf = dict()
     for channel in cf:
         ncf[channel] = cf[channel] + (10.**log_flux_o3) * agn_ratios[channel]
-    detected, isagn, p1, p2, p3 = select_agn(cf=ncf, cf_ivar=cf_ivar, good=np.ones(1, dtype=bool))
-    return(detected, isagn, p1, p2, p3)
+    detected, isagn, lines = select_agn(cf=ncf, cf_ivar=cf_ivar, good=np.ones(1, dtype=bool))
+    return(detected, isagn, lines)
 
 
 def find_o3_limit(redshift=None, cf=None, cf_ivar=None, agn_ratios=None):
@@ -132,18 +126,18 @@ def find_o3_limit(redshift=None, cf=None, cf_ivar=None, agn_ratios=None):
     'OIII-5008', 'Ha-6564', and 'Hb-4862'
 """
     bounds = np.array([15., 50.], dtype=np.float32)
-    w0 = would_be_agn(redshift=redshift, cf=cf, cf_ivar=cf_ivar, agn_ratios=agn_ratios,
-                      log_luminosity_o3=bounds[0])
-    if(w0 == True):
+    detected, isagn0, lines = would_be_agn(redshift=redshift, cf=cf, cf_ivar=cf_ivar, agn_ratios=agn_ratios,
+                                           log_luminosity_o3=bounds[0])
+    if(isagn0 == True):
         return(- 9999.)
-    w1 = would_be_agn(redshift=redshift, cf=cf, cf_ivar=cf_ivar, agn_ratios=agn_ratios,
-                      log_luminosity_o3=bounds[1])
-    if(w1 == False):
+    detected, isagn1, lines = would_be_agn(redshift=redshift, cf=cf, cf_ivar=cf_ivar, agn_ratios=agn_ratios,
+                                           log_luminosity_o3=bounds[1])
+    if(isagn1 == False):
         return(- 9999.)
     while((bounds[1] - bounds[0]) > 1.e-4):
         bounds_middle = 0.5 * (bounds[1] + bounds[0])
-        detected, isagn, p1, p2, p3 = would_be_agn(redshift=redshift, cf=cf, cf_ivar=cf_ivar, agn_ratios=agn_ratios,
-                                                   log_luminosity_o3=bounds_middle)
+        detected, isagn, lines = would_be_agn(redshift=redshift, cf=cf, cf_ivar=cf_ivar, agn_ratios=agn_ratios,
+                                              log_luminosity_o3=bounds_middle)
         if(isagn):
             bounds[1] = bounds_middle
         else:
@@ -223,14 +217,8 @@ def select_agn(cf=None, cf_ivar=None, good=None):
     isagn : ndarray of bool
         is this an identified AGN
 
-    p1 : ndarray of np.float32
-        P1 component of Ji & Yan space
-
-    p2 : ndarray of np.float32
-        P2 component of Ji & Yan space
-
-    p3 : ndarray of np.float32
-        P3 component of Ji & Yan space
+    lines : ndarray
+       contains line measurements and errors
 
     Notes
     -----
@@ -240,28 +228,77 @@ def select_agn(cf=None, cf_ivar=None, good=None):
 
     cf_ivar must have the keys 'NII-6585', 'SII-67I8', 'SII-6732',
     'OIII-5008', 'Ha-6564', and 'Hb-4862'
+
+    lines has: 'n2ha', 'n2ha_err', 's2ha', 's2ha_err', 'o3hb', 'o3hb_err',
+      'p1', 'p1_err', 'p2', 'p2_err', 'p3', 'p3_err'
 """
     detected = good.copy()
     for channel in cf_ivar:
         detected[good] = (detected[good] & (cf[channel][good] *
                                             np.sqrt(cf_ivar[channel][good]) > 2.))
 
-    tmp_n2ha = np.log10(cf['NII-6585'][detected] / cf['Ha-6564'][detected])
-    tmp_s2ha = np.log10(cf['SII-6718+6732'][detected] / cf['Ha-6564'][detected])
-    tmp_o3hb = np.log10(cf['OIII-5008'][detected] / cf['Hb-4862'][detected])
-    tmp_p1, tmp_p2, tmp_p3 = magn.jiyan.ratios_to_pspace(n2ha=tmp_n2ha,
-                                                         s2ha=tmp_s2ha,
-                                                         o3hb=tmp_o3hb)
-    p1 = np.zeros(len(good), dtype=np.float32) - 9999.
-    p2 = np.zeros(len(good), dtype=np.float32) - 9999.
-    p3 = np.zeros(len(good), dtype=np.float32) - 9999.
-    p1[detected] = tmp_p1
-    p2[detected] = tmp_p2
-    p3[detected] = tmp_p3
+    n2ha = np.log10(cf['NII-6585'][detected] / cf['Ha-6564'][detected])
+    n2ha_err = (1. / np.log(10.)) * np.sqrt(1. / (cf_ivar['NII-6585'][detected] * cf['NII-6585'][detected]**2) +
+                                            1. / (cf_ivar['Ha-6564'][detected] * cf['Ha-6564'][detected]**2))
+                                                  
+    s2ha = np.log10(cf['SII-6718+6732'][detected] / cf['Ha-6564'][detected])
+    s2ha_err = (1. / np.log(10.)) * np.sqrt(1. / (cf_ivar['SII-6718+6732'][detected] * cf['SII-6718+6732'][detected]**2) +
+                                            1. / (cf_ivar['Ha-6564'][detected] * cf['Ha-6564'][detected]**2))
 
-    isagn = ((detected) & (p1 > - 0.3) & (p3 > 0.5))
+    o3hb = np.log10(cf['OIII-5008'][detected] / cf['Hb-4862'][detected])
+    o3hb_err = (1. / np.log(10.)) * np.sqrt(1. / (cf_ivar['OIII-5008'][detected] * cf['OIII-5008'][detected]**2) +
+                                            1. / (cf_ivar['Hb-4862'][detected] * cf['Hb-4862'][detected]**2))
 
-    return(detected, isagn, p1, p2, p3)
+    p1, p2, p3, p1_err, p2_err, p3_err = magn.jiyan.ratios_to_pspace(n2ha=n2ha,
+                                                                     s2ha=s2ha,
+                                                                     o3hb=o3hb,
+                                                                     n2ha_err=n2ha_err,
+                                                                     s2ha_err=s2ha_err,
+                                                                     o3hb_err=o3hb_err)
+
+    lines_dtype = np.dtype([('n2ha', np.float32),
+                            ('n2ha_err', np.float32),
+                            ('s2ha', np.float32),
+                            ('s2ha_err', np.float32),
+                            ('o3hb', np.float32),
+                            ('o3hb_err', np.float32),
+                            ('p1', np.float32),
+                            ('p1_err', np.float32),
+                            ('p2', np.float32),
+                            ('p2_err', np.float32),
+                            ('p3', np.float32),
+                            ('p3_err', np.float32)])
+
+    lines = np.zeros(len(good), dtype=lines_dtype)
+    lines['n2ha'] = - 9999
+    lines['n2ha_err'] = - 9999
+    lines['s2ha'] = - 9999
+    lines['s2ha_err'] = - 9999
+    lines['o3hb'] = - 9999
+    lines['o3hb_err'] = - 9999
+    lines['p1'] = - 9999
+    lines['p1_err'] = - 9999
+    lines['p2'] = - 9999
+    lines['p2_err'] = - 9999
+    lines['p3'] = - 9999
+    lines['p3_err'] = - 9999
+
+    lines['n2ha'][detected] = n2ha
+    lines['n2ha_err'][detected] = n2ha_err
+    lines['s2ha'][detected] = s2ha
+    lines['s2ha_err'][detected] = s2ha_err
+    lines['o3hb'][detected] = o3hb
+    lines['o3hb_err'][detected] = o3hb_err
+    lines['p1'][detected] = p1
+    lines['p1_err'][detected] = p1_err
+    lines['p2'][detected] = p2
+    lines['p2_err'][detected] = p2_err
+    lines['p3'][detected] = p3
+    lines['p3_err'][detected] = p3_err
+
+    isagn = ((detected) & (lines['p1'] > - 0.3) & (lines['p3'] > 0.5))
+
+    return(detected, isagn, lines)
 
 
 if __name__ == '__main__':
@@ -320,13 +357,17 @@ if __name__ == '__main__':
         cf_ivar[channel] = central_flux['central_emline_gflux_ivar'][:, ichannel[channel]]
         cf_nbad[channel] = central_flux['central_emline_gflux_nbad'][:, ichannel[channel]]
     cf['SII-6718+6732'] = cf['SII-6718'] + cf['SII-6732']
+    cf_ivar['SII-6718+6732'] = np.zeros(len(cf['SII-6718']), dtype=np.float32)
+    igd = np.where((cf_ivar['SII-6718'] > 0) & (cf_ivar['SII-6732'] > 0))[0]
+    cf_ivar['SII-6718+6732'][igd] = 1. / (1. / cf_ivar['SII-6718'][igd] +
+                                          1. / cf_ivar['SII-6732'][igd])
 
     good = np.ones(len(done), dtype=bool)
     good = good & (drpall['z'] > 0)
     for channel in ichannel:
         good = (good & (cf_ivar[channel] > 0.) & (cf_nbad[channel] < 4))
 
-    detected, isagn, p1, p2, p3 = select_agn(cf=cf, cf_ivar=cf_ivar, good=good)
+    detected, isagn, lines = select_agn(cf=cf, cf_ivar=cf_ivar, good=good)
 
     # Find our AGN
     iagn = np.where(isagn)[0]
@@ -366,7 +407,7 @@ if __name__ == '__main__':
                                                        agn_ratios=agn_ratios)
         if(debug & ((plateifu is None) |
                     (plateifu == drpall['plateifu'][i]))):
-            plt.scatter(p1[detected], p3[detected], s=1, color='grey')
+            plt.scatter(lines['p1'][detected], lines['p3'][detected], s=1, color='grey')
             plot_o3_limit(redshift=drpall['z'][i:i + 1],
                           cf=ccf, cf_ivar=ccf_ivar,
                           agn_ratios=agn_ratios)
@@ -389,8 +430,17 @@ if __name__ == '__main__':
                           ('good', bool),
                           ('detected', bool),
                           ('p1', np.float32),
+                          ('p1_err', np.float32),
                           ('p2', np.float32),
+                          ('p2_err', np.float32),
                           ('p3', np.float32),
+                          ('p3_err', np.float32),
+                          ('n2ha', np.float32),
+                          ('n2ha_err', np.float32),
+                          ('s2ha', np.float32),
+                          ('s2ha_err', np.float32),
+                          ('o3hb', np.float32),
+                          ('o3hb_err', np.float32),
                           ('log_luminosity_o3', np.float32),
                           ('log_luminosity_o3_limit', np.float32)])
 
@@ -399,9 +449,15 @@ if __name__ == '__main__':
     agn['isagn'][iagn] = True
     agn['good'] = good
     agn['detected'] = detected
-    agn['p1'] = p1
-    agn['p2'] = p2
-    agn['p3'] = p3
+    agn['p1'] = lines['p1']
+    agn['p2'] = lines['p2']
+    agn['p3'] = lines['p3']
+    agn['p1_err'] = lines['p1_err']
+    agn['p2_err'] = lines['p2_err']
+    agn['p3_err'] = lines['p3_err']
+    agn['n2ha'] = lines['n2ha']
+    agn['s2ha'] = lines['s2ha']
+    agn['o3hb'] = lines['o3hb']
     agn['log_luminosity_o3'] = - 9999.
     agn['log_luminosity_o3_limit'] = - 9999.
     agn['log_luminosity_o3'][iagn] = log_agn_luminosity_o3
