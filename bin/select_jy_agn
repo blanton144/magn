@@ -221,9 +221,6 @@ if __name__ == '__main__':
     hdr.append({'name':'MNSA_CAT',
                 'value':version,
                 'comment':'mnsa catalog version'})
-    hdr.append({'name':'MAGNVER',
-                'value':magn.__version__,
-                'comment':'magn version'})
     for k in agn_ratios:
         hdr.append({'name':k,
                     'value':agn_ratios[k],

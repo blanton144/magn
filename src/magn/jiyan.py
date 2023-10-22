@@ -139,15 +139,11 @@ def ratios_to_pspace(n2ha=None, s2ha=None, o3hb=None,
     return(p1, p2, p3, p1_err, p2_err, p3_err)
 
 
-def would_be_agn(redshift=None, cf=None, cf_ivar=None, agn_ratios=None,
-                 log_luminosity_o3=None):
+def would_be_agn(cf=None, cf_ivar=None, agn_ratios=None, log_flux_o3=None):
     """Return whether a given luminosity will pass the limit to be classified as AGN
 
     Parameters
     ----------
-
-    redshift : np.float32
-        redshift of galaxy
 
     cf : dict of np.float32
         fluxes for each line
@@ -158,8 +154,8 @@ def would_be_agn(redshift=None, cf=None, cf_ivar=None, agn_ratios=None,
     agn_ratios : dict of np.float32
         ratios of lines relative to [OIII] for typical AGN
 
-    log_luminosity_o3 : np.float32
-        limiting [OIII] luminosity
+    log_flux_o3 : np.float32
+        additional [OIII] flux to try
     
     Returns
     -------
@@ -182,8 +178,6 @@ def would_be_agn(redshift=None, cf=None, cf_ivar=None, agn_ratios=None,
     cf_ivar must have the keys 'NII-6585', 'SII-67I8', 'SII-6732',
     'OIII-5008', 'Ha-6564', and 'Hb-4862'
 """
-    logterm = mnsa.mnsautils.log_flux_to_luminosity(redshift=redshift)
-    log_flux_o3 = log_luminosity_o3 - logterm
 
     ncf = dict()
     for channel in cf:
@@ -340,25 +334,36 @@ def find_o3_limit(redshift=None, cf=None, cf_ivar=None, agn_ratios=None):
 
     cf_ivar must have the keys 'NII-6585', 'SII-67I8', 'SII-6732',
     'OIII-5008', 'Ha-6564', and 'Hb-4862'
+
+    The "limit" is the actual OIII-5008 luminosity plus the luminosity
+    that needed to be added for the object to classify as an AGN.
+    This ensures consistency between what we call the AGN luminosity
+    on either side of the classification line.
 """
-    bounds = np.array([15., 50.], dtype=np.float32)
-    detected, isagn0, lines = would_be_agn(redshift=redshift, cf=cf, cf_ivar=cf_ivar, agn_ratios=agn_ratios,
-                                           log_luminosity_o3=bounds[0])
+    logterm = mnsa.mnsautils.log_flux_to_luminosity(redshift=redshift)
+    bounds = np.array([15., 50.], dtype=np.float32) - logterm
+    log_flux_o3 = bounds[0]
+    detected, isagn0, lines = would_be_agn(cf=cf, cf_ivar=cf_ivar, agn_ratios=agn_ratios,
+                                           log_flux_o3=log_flux_o3)
     if(isagn0 == True):
         return(- 9999.)
-    detected, isagn1, lines = would_be_agn(redshift=redshift, cf=cf, cf_ivar=cf_ivar, agn_ratios=agn_ratios,
-                                           log_luminosity_o3=bounds[1])
+    log_flux_o3 = bounds[1]
+    detected, isagn1, lines = would_be_agn(cf=cf, cf_ivar=cf_ivar, agn_ratios=agn_ratios,
+                                           log_flux_o3=log_flux_o3)
     if(isagn1 == False):
         return(- 9999.)
     while((bounds[1] - bounds[0]) > 1.e-4):
         bounds_middle = 0.5 * (bounds[1] + bounds[0])
-        detected, isagn, lines = would_be_agn(redshift=redshift, cf=cf, cf_ivar=cf_ivar, agn_ratios=agn_ratios,
-                                              log_luminosity_o3=bounds_middle)
+        log_flux_o3 = bounds_middle
+        detected, isagn, lines = would_be_agn(cf=cf, cf_ivar=cf_ivar, agn_ratios=agn_ratios,
+                                              log_flux_o3=log_flux_o3)
         if(isagn):
             bounds[1] = bounds_middle
         else:
             bounds[0] = bounds_middle
-    log_luminosity_o3_limit = 0.5 * (bounds[1] + bounds[0])
+    log_flux_o3_limit = 0.5 * (bounds[1] + bounds[0])
+    log_flux_o3_total = np.log10(cf['OIII-5008'] + 10.**log_flux_o3_limit)
+    log_luminosity_o3_limit = log_flux_o3_total + logterm
     return(log_luminosity_o3_limit)
 
 

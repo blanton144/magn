@@ -1,0 +1,180 @@
+#!/usr/bin/env python
+# encoding: utf-8
+
+
+import os
+import sys
+import subprocess
+import argparse
+import matplotlib.pyplot as plt
+import matplotlib.patches
+import matplotlib
+import fitsio
+import numpy as np
+import mnsa
+import magn
+import magn.jiyan
+import mnsa.mnsautils
+
+matplotlib.rcParams['font.size'] = 24
+matplotlib.rcParams['figure.figsize'] = [10., 7.]
+matplotlib.rcParams['text.usetex'] = True
+
+
+def plot_o3_limit(redshift=None, cf=None, cf_ivar=None, agn_ratios=None, ax=None):
+    """Plot path in P1-P3 space
+
+    Parameters
+    ----------
+
+    redshift : np.float32
+        redshift of galaxy
+
+    cf : dict of ndarray of np.float32
+        fluxes for each line (1-element arrays)
+
+    cf_ivar : dict of ndarray of np.float32
+        inverse variance of fluxes for each line (1-element arrays)
+
+    agn_ratios : dict of ndarray of np.float32
+        ratios of lines relative to [OIII] for typical AGN
+
+    Notes
+    -----
+
+    cf and agn_ratios must have the keys 'NII-6585', 'SII-6718+6732',
+    'SII-67I8', 'SII-6732', 'OIII-5008', 'Ha-6564', and 'Hb-4862'
+
+    cf_ivar must have the keys 'NII-6585', 'SII-67I8', 'SII-6732',
+    'OIII-5008', 'Ha-6564', and 'Hb-4862'
+"""
+    logterm = mnsa.mnsautils.log_flux_to_luminosity(redshift=redshift)
+    o3s = 30 + 20. * np.arange(1000) / 1000. - logterm
+    test_detected = np.zeros(len(o3s), dtype=bool)
+    test_isagn = np.zeros(len(o3s), dtype=bool)
+    test_p1 = np.zeros(len(o3s), dtype=np.float32)
+    test_p2 = np.zeros(len(o3s), dtype=np.float32)
+    test_p3 = np.zeros(len(o3s), dtype=np.float32)
+    for i, o3 in enumerate(o3s):
+        tmp_detected, tmp_isagn, tmp_lines = magn.jiyan.would_be_agn(cf=cf, cf_ivar=cf_ivar, agn_ratios=agn_ratios, log_flux_o3=o3)
+        test_detected[i] = tmp_detected
+        test_isagn[i] = tmp_isagn
+        test_p1[i] = tmp_lines['p1']
+        test_p2[i] = tmp_lines['p2']
+        test_p3[i] = tmp_lines['p3']
+
+    if(test_detected[0]):
+        ax.plot(test_p1[0:1], test_p3[0:1], 'o', color='black', markersize=6)
+        if((test_p1[0] > -0.3) & (test_p3[0] > 0.5)):
+            print("yikes")
+    ax.plot(test_p1[test_detected], test_p3[test_detected], linewidth=1, color='black')
+    ax.plot(test_p1[test_isagn], test_p3[test_isagn], linewidth=1, color='red')
+
+    return
+
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(
+        prog=os.path.basename(sys.argv[0]),
+        description='Select Ji and Yan-style AGN.')
+
+    parser.add_argument('-v', '--version', dest='version',
+                        type=str, default='0.3.2',
+                        help='MNSA configuration version')
+
+    parser.add_argument('-o', '--old', dest='dr17',
+                        required=False, help='dr17',
+                        action='store_true',
+                        default=False)
+
+    args = parser.parse_args()
+    version = args.version
+    dr17 = args.dr17
+
+    print("Reading data", flush=True)
+
+    done = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
+                                    '{v}.analysis', 'mnsa-done-{v}.fits').format(v=version))
+    drpall = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
+                                      '{v}', 'manga', 'redux', '{v}',
+                                      'drpall-{v}.fits').format(v=version))
+
+    agnfile = os.path.join(os.getenv('MNSA_DATA'),
+                           version + '.analysis', 'agn',
+                           'jiyan', 'jiyan-agn-{v}.fits')
+    if(dr17):
+        agnfile = agnfile.replace('agn-', 'agn-dr17-')
+    agnfile = agnfile.format(v=version)
+    agn = fitsio.read(agnfile)
+    hdr = fitsio.read_header(agnfile, ext=1)
+
+    agn_ratios = dict()
+    names = ['OIII-5008', 'NII-6585', 'SII-6718', 'SII-6732', 'SII-6718+6732',
+             'Ha-6564', 'Hb-4862', 'n2ha', 's2ha', 'o3hb', 'p1', 'p2', 'p3']
+    for name in names:
+        agn_ratios[name] = np.float32(hdr[name])
+
+    cf, cf_ivar, cf_nbad, good = magn.jiyan.read_central_flux(version=version,
+                                                              dr17=dr17)
+
+    detected = agn['detected']
+    
+    print("Plotting", flush=True)
+
+    fig, ax = plt.subplots()
+    
+    ax.scatter(agn['p1'][detected], agn['p3'][detected], s=8, alpha=0.2, color='black')
+    ax.set_xlabel(r'{\rm P1}')
+    ax.set_ylabel(r'{\rm P3}')
+    ax.set_xlim([-1.3, 1.])
+    ax.set_ylim([-0.35, 1.6])
+
+    ax.add_patch(matplotlib.patches.Rectangle((- 0.3, 0.5), 5, 5, alpha=0.3, edgecolor='blue'))
+
+    igd = np.where((agn['good'] == True) & (agn['isagn'] == False))[0]
+    idet = np.where((agn['detected'] == True) & (agn['isagn'] == False))[0]
+    inondet = np.where((agn['detected'] == False) & (agn['good'] == True))[0]
+    iplot = np.array([], dtype=np.int32)
+    np.random.seed(10)
+    np.random.shuffle(igd)
+    np.random.shuffle(idet)
+
+    np.random.seed(20)
+    np.random.shuffle(inondet)
+
+    n = 8
+    p1grid = - 1.3 + ( 0.7 - (- 1.3)) * np.arange(n + 1, dtype=np.int32) / np.float32(n)
+    for p1min, p1max in zip(p1grid[:-1], p1grid[1:]):
+        iin = np.where((agn['p1'][idet] > p1min) & (agn['p1'][idet] < p1max))[0][0]
+        iplot = np.append(iplot, [idet[iin]])
+
+    n = 8
+    p3grid = - 0.3 + ( 1.3 - (- 0.3)) * np.arange(n + 1, dtype=np.int32) / np.float32(n)
+    for p3min, p3max in zip(p3grid[:-1], p3grid[1:]):
+        iin = np.where((agn['p3'][idet] > p3min) & (agn['p3'][idet] < p3max))[0][0]
+        iplot = np.append(iplot, [idet[iin]])
+
+    n = 16
+    iplot = np.append(iplot, inondet[0:n])
+
+    for ii in iplot:
+        ccf = dict()
+        for k in cf:
+            ccf[k] = cf[k][ii:ii + 1]
+        ccf_ivar = dict()
+        for k in cf_ivar:
+            ccf_ivar[k] = cf_ivar[k][ii:ii + 1]
+        #for n in agn.dtype.names:
+            #print("{n}: {v}".format(v=agn[n][ii], n=n))
+        plot_o3_limit(redshift=agn['z'][ii], cf=ccf, cf_ivar=ccf_ivar, agn_ratios=agn_ratios, ax=ax)
+    
+    plt.tight_layout()
+
+    pngfile = os.path.join(os.getenv('MNSA_DATA'),
+                           version + '.analysis', 'agn',
+                           'jiyan', 'jiyan-agn-select-{v}.png')
+    pngfile = pngfile.format(v=version)
+    plt.savefig(pngfile, dpi=300)
+    subprocess.run(['convert', pngfile, '-trim', pngfile])
+
