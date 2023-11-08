@@ -1,0 +1,123 @@
+#!/usr/bin/env python
+# encoding: utf-8
+
+
+import os
+import sys
+import subprocess
+import argparse
+import matplotlib.pyplot as plt
+import matplotlib.patches
+import matplotlib
+import fitsio
+import numpy as np
+import mnsa
+import magn
+import magn.midir
+import magn.agn
+import mnsa.mnsautils
+
+matplotlib.rcParams['font.size'] = 26
+matplotlib.rcParams['figure.figsize'] = [10., 7.]
+matplotlib.rcParams['text.usetex'] = True
+
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(
+        prog=os.path.basename(sys.argv[0]),
+        description='Plot mid-IR AGN.')
+
+    parser.add_argument('-v', '--version', dest='version',
+                        type=str, default='0.3.2',
+                        help='MNSA configuration version')
+
+    parser.add_argument('-o', '--old', dest='dr17',
+                        required=False, help='dr17',
+                        action='store_true',
+                        default=False)
+
+    args = parser.parse_args()
+    version = args.version
+    dr17 = args.dr17
+
+    print("Reading data", flush=True)
+
+    done = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
+                                    '{v}.analysis', 'mnsa-done-{v}.fits').format(v=version))
+    drpall = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
+                                      '{v}', 'manga', 'redux', '{v}',
+                                      'drpall-{v}.fits').format(v=version))
+    pipe3dfile = os.path.join(os.getenv('MANGA_PIPE3D'),
+                              'v3_1_1', '3.1.1',
+                              'SDSS17Pipe3D_v3_1_1.fits')
+    original_pipe3d = fitsio.read(pipe3dfile)
+
+    cpi, idrp, ipipe3d = np.intersect1d(drpall['plateifu'], original_pipe3d['plateifu'],
+                                        return_indices=True)
+    pipe3d = np.zeros(len(drpall), dtype=original_pipe3d.dtype)
+    pipe3d['plateifu'] = 'not_done'
+    pipe3d[idrp] = original_pipe3d[ipipe3d]
+
+    agnfile = os.path.join(os.getenv('MNSA_DATA'),
+                           version + '.analysis', 'agn',
+                           'midir', 'midir-agn-{v}.fits')
+    if(dr17):
+        agnfile = agnfile.replace('agn-', 'agn-dr17-')
+    agnfile = agnfile.format(v=version)
+    agn = fitsio.read(agnfile)
+
+    good = (agn['good']) & (pipe3d['vel_disp_ssp_1Re'] > 60.)
+    agn_good = agn[good]
+    pipe3d_good = pipe3d[good]
+    
+    log_sfr = pipe3d_good['log_SFR_ssp']
+    log_mass = pipe3d_good['log_Mass']
+    log_ssfr = log_sfr - log_mass
+
+    vdisp = pipe3d_good['vel_disp_ssp_1Re']
+    log_mbh = magn.agn.vdisp_to_logmbh(vdisp=vdisp)
+    log_ledd = magn.agn.logmbh_to_logledd(logmbh=log_mbh)
+    
+    isagn = agn_good['isagn']
+    log_luminosity_w2 = agn_good['log_nuLnu_w2_agn']
+    log_luminosity_w2_threshold = agn_good['log_nuLnu_w2_agn_threshold']
+
+    log_bolo = magn.agn.logw2_to_logbolo(log_luminosity_w2)
+    log_bolo_threshold = magn.agn.logw2_to_logbolo(log_luminosity_w2_threshold)
+
+    log_eddrat = log_bolo - log_ledd
+    log_eddrat_threshold = log_bolo_threshold - log_ledd
+
+    iagn = np.where(isagn == True)[0]
+    ithreshold = np.where(isagn == False)[0]
+
+    print("Plotting", flush=True)
+
+    fig, ax = plt.subplots()
+
+    ax.errorbar(log_mass[ithreshold], log_eddrat_threshold[ithreshold],
+                yerr=np.ones(len(ithreshold)) * 0.3,
+                uplims=np.ones(len(ithreshold)),
+                xerr=0.04, linestyle='none', marker='.', markersize=1, alpha=0.15,
+                linewidth=1, color='black', zorder=1,
+                label=r'{\rm AGN Detection Thresholds}')
+    
+    ax.scatter(log_mass[iagn], log_eddrat[iagn], alpha=1.0, color='red', s=40,
+               zorder=2, label=r'{\rm AGN Detections}')
+    ax.set_xlabel(r'$\log_{10} M / M_\odot$')
+    ax.set_ylabel(r'$\log_{10} \lambda~{\rm (W2-based)}$')
+
+    ax.set_xlim([9.0, 12.5])
+    ax.set_ylim([-5.7, 0.9])
+
+    ax.legend()
+
+    plt.tight_layout()
+
+    pngfile = os.path.join(os.getenv('MNSA_DATA'),
+                           version + '.analysis', 'agn',
+                           'midir', 'midir-thresholds-mass-{v}.png')
+    pngfile = pngfile.format(v=version)
+    plt.savefig(pngfile, dpi=150)
+    subprocess.run(['convert', pngfile, '-trim', pngfile])

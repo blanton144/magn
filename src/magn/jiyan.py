@@ -139,8 +139,8 @@ def ratios_to_pspace(n2ha=None, s2ha=None, o3hb=None,
     return(p1, p2, p3, p1_err, p2_err, p3_err)
 
 
-def would_be_agn(cf=None, cf_ivar=None, agn_ratios=None, log_flux_o3=None):
-    """Return whether a given luminosity will pass the limit to be classified as AGN
+def would_be_agn(cf=None, cf_ivar=None, agn_ratios=None, log_flux_o3=None, nsigma=2.):
+    """Return whether a given luminosity will pass the threshold to be classified as AGN
 
     Parameters
     ----------
@@ -156,6 +156,9 @@ def would_be_agn(cf=None, cf_ivar=None, agn_ratios=None, log_flux_o3=None):
 
     log_flux_o3 : np.float32
         additional [OIII] flux to try
+
+    nsigma : np.float32
+        number of sigma to consider detected
     
     Returns
     -------
@@ -183,11 +186,13 @@ def would_be_agn(cf=None, cf_ivar=None, agn_ratios=None, log_flux_o3=None):
     for channel in cf:
         ncf[channel] = cf[channel] + (10.**log_flux_o3) * agn_ratios[channel]
     detected, isagn, lines = select_agn(cf=ncf, cf_ivar=cf_ivar,
-                                        good=np.ones(1, dtype=bool))
+                                        good=np.ones(1, dtype=bool),
+                                        nsigma=nsigma)
     return(detected, isagn, lines)
 
 
-def select_agn(cf=None, cf_ivar=None, good=None, p1_limit=-0.3, p3_limit=0.5):
+def select_agn(cf=None, cf_ivar=None, good=None, p1_threshold=-0.3, p3_threshold=0.55,
+               nsigma=2.):
     """Select AGN using P1 and P3
 
     Parameters
@@ -202,11 +207,14 @@ def select_agn(cf=None, cf_ivar=None, good=None, p1_limit=-0.3, p3_limit=0.5):
     good : ndarray of bool
         whether to check each galaxy
 
-    p1_limit : np.float32
-        lower limit of P1 to be an AGN
+    p1_threshold : np.float32
+        lower threshold of P1 to be an AGN
 
-    p3_limit : np.float32
-        lower limit of P3 to be an AGN
+    p3_threshold : np.float32
+        lower threshold of P3 to be an AGN
+
+    nsigma : np.float32
+        number of sigma to consider detected
 
     Returns
     -------
@@ -235,7 +243,18 @@ def select_agn(cf=None, cf_ivar=None, good=None, p1_limit=-0.3, p3_limit=0.5):
     detected = good.copy()
     for channel in cf_ivar:
         detected[good] = (detected[good] & (cf[channel][good] *
-                                            np.sqrt(cf_ivar[channel][good]) > 2.))
+                                            np.sqrt(cf_ivar[channel][good]) > nsigma))
+
+    o3_detected = good.copy()
+    channel = 'OIII-5008'
+    o3_detected[good] = (o3_detected[good] & (cf[channel][good] *
+                                              np.sqrt(cf_ivar[channel][good]) > nsigma))
+    o3 = cf[channel][o3_detected]
+
+    o3_good = good.copy()
+    channel = 'OIII-5008'
+    o3_good[good] = (o3_good[good] & (cf_ivar[channel][good] > 0.))
+    o3_err = 1. / np.sqrt(cf_ivar[channel][o3_good])
 
     n2ha = np.log10(cf['NII-6585'][detected] / cf['Ha-6564'][detected])
     n2ha_err = (1. / np.log(10.)) * np.sqrt(1. / (cf_ivar['NII-6585'][detected] * cf['NII-6585'][detected]**2) +
@@ -256,7 +275,9 @@ def select_agn(cf=None, cf_ivar=None, good=None, p1_limit=-0.3, p3_limit=0.5):
                                                           s2ha_err=s2ha_err,
                                                           o3hb_err=o3hb_err)
     
-    lines_dtype = np.dtype([('n2ha', np.float32),
+    lines_dtype = np.dtype([('o3', np.float32),
+                            ('o3_err', np.float32),
+                            ('n2ha', np.float32),
                             ('n2ha_err', np.float32),
                             ('s2ha', np.float32),
                             ('s2ha_err', np.float32),
@@ -270,6 +291,8 @@ def select_agn(cf=None, cf_ivar=None, good=None, p1_limit=-0.3, p3_limit=0.5):
                             ('p3_err', np.float32)])
 
     lines = np.zeros(len(good), dtype=lines_dtype)
+    lines['o3'] = - 9999
+    lines['o3_err'] = - 9999
     lines['n2ha'] = - 9999
     lines['n2ha_err'] = - 9999
     lines['s2ha'] = - 9999
@@ -283,6 +306,8 @@ def select_agn(cf=None, cf_ivar=None, good=None, p1_limit=-0.3, p3_limit=0.5):
     lines['p3'] = - 9999
     lines['p3_err'] = - 9999
 
+    lines['o3'][o3_detected] = o3
+    lines['o3_err'][o3_good] = o3_err
     lines['n2ha'][detected] = n2ha
     lines['n2ha_err'][detected] = n2ha_err
     lines['s2ha'][detected] = s2ha
@@ -296,14 +321,15 @@ def select_agn(cf=None, cf_ivar=None, good=None, p1_limit=-0.3, p3_limit=0.5):
     lines['p3'][detected] = p3
     lines['p3_err'][detected] = p3_err
 
-    isagn = ((detected) & (lines['p1'] > p1_limit) &
-             (lines['p3'] > p3_limit))
+    isagn = ((detected) & (lines['p1'] > p1_threshold) &
+             (lines['p3'] > p3_threshold))
 
     return(detected, isagn, lines)
 
 
-def find_o3_limit(redshift=None, cf=None, cf_ivar=None, agn_ratios=None):
-    """Find [OIII] luminosity limit
+def find_o3_threshold(redshift=None, cf=None, cf_ivar=None, agn_ratios=None,
+                      nsigma=None):
+    """Find [OIII] luminosity threshold
 
     Parameters
     ----------
@@ -320,11 +346,14 @@ def find_o3_limit(redshift=None, cf=None, cf_ivar=None, agn_ratios=None):
     agn_ratios : dict of ndarray of np.float32
         ratios of lines relative to [OIII] for typical AGN
 
+    nsigma : np.float32
+        number of sigma to consider detected
+
     Returns
     -------
 
-    log_luminosity_o3_limit : np.float32
-        limiting [OIII] luminosity
+    log_luminosity_o3_threshold : np.float32
+        threshold [OIII] luminosity
 
     Notes
     -----
@@ -335,7 +364,7 @@ def find_o3_limit(redshift=None, cf=None, cf_ivar=None, agn_ratios=None):
     cf_ivar must have the keys 'NII-6585', 'SII-67I8', 'SII-6732',
     'OIII-5008', 'Ha-6564', and 'Hb-4862'
 
-    The "limit" is the actual OIII-5008 luminosity plus the luminosity
+    The "threshold" is the actual OIII-5008 luminosity plus the luminosity
     that needed to be added for the object to classify as an AGN.
     This ensures consistency between what we call the AGN luminosity
     on either side of the classification line.
@@ -344,27 +373,27 @@ def find_o3_limit(redshift=None, cf=None, cf_ivar=None, agn_ratios=None):
     bounds = np.array([15., 50.], dtype=np.float32) - logterm
     log_flux_o3 = bounds[0]
     detected, isagn0, lines = would_be_agn(cf=cf, cf_ivar=cf_ivar, agn_ratios=agn_ratios,
-                                           log_flux_o3=log_flux_o3)
+                                           log_flux_o3=log_flux_o3, nsigma=nsigma)
     if(isagn0 == True):
         return(- 9999.)
     log_flux_o3 = bounds[1]
     detected, isagn1, lines = would_be_agn(cf=cf, cf_ivar=cf_ivar, agn_ratios=agn_ratios,
-                                           log_flux_o3=log_flux_o3)
+                                           log_flux_o3=log_flux_o3, nsigma=nsigma)
     if(isagn1 == False):
         return(- 9999.)
     while((bounds[1] - bounds[0]) > 1.e-4):
         bounds_middle = 0.5 * (bounds[1] + bounds[0])
         log_flux_o3 = bounds_middle
         detected, isagn, lines = would_be_agn(cf=cf, cf_ivar=cf_ivar, agn_ratios=agn_ratios,
-                                              log_flux_o3=log_flux_o3)
+                                              log_flux_o3=log_flux_o3, nsigma=nsigma)
         if(isagn):
             bounds[1] = bounds_middle
         else:
             bounds[0] = bounds_middle
-    log_flux_o3_limit = 0.5 * (bounds[1] + bounds[0])
-    log_flux_o3_total = np.log10(cf['OIII-5008'] + 10.**log_flux_o3_limit)
-    log_luminosity_o3_limit = log_flux_o3_total + logterm
-    return(log_luminosity_o3_limit)
+    log_flux_o3_threshold = 0.5 * (bounds[1] + bounds[0])
+    log_flux_o3_total = np.log10(cf['OIII-5008'] + 10.**log_flux_o3_threshold)
+    log_luminosity_o3_threshold = log_flux_o3_total + logterm
+    return(log_luminosity_o3_threshold)
 
 
 class JiYan(object):

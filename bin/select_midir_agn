@@ -5,7 +5,7 @@ import sys
 import argparse
 import numpy as np
 import fitsio
-import mnsa.agn
+import magn.midir
 import kcorrect.response
 
 
@@ -36,19 +36,36 @@ if __name__ == '__main__':
     version = args.version
 
     print("Reading catalog", flush=True)
-    mnsa_file = os.path.join(os.getenv('MNSA_DATA'),
-                             version, 'mnsa-{v}.fits'.format(v=version))
-    summary = fitsio.read(mnsa_file, ext='SUMMARY')
-    pipe3d = fitsio.read(mnsa_file, ext='PIPE3D')
-    sps = fitsio.read(mnsa_file, ext='SPS_AP04')
+    done = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
+                                    '{v}.analysis', 'mnsa-done-{v}.fits').format(v=version))
+    drpall = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
+                                      '{v}', 'manga', 'redux', '{v}',
+                                      'drpall-{v}.fits').format(v=version))
+    pipe3dfile = os.path.join(os.getenv('MANGA_PIPE3D'),
+                              'v3_1_1', '3.1.1',
+                              'SDSS17Pipe3D_v3_1_1.fits')
+    original_pipe3d = fitsio.read(pipe3dfile)
+
+    cpi, idrp, ipipe3d = np.intersect1d(drpall['plateifu'], original_pipe3d['plateifu'],
+                                        return_indices=True)
+    pipe3d = np.zeros(len(drpall), dtype=original_pipe3d.dtype)
+    pipe3d['plateifu'] = 'not_done'
+    pipe3d[idrp] = original_pipe3d[ipipe3d]
+
+    old_version = '0.3.1'
+    spsfile = os.path.join(os.getenv('MNSA_DATA'),
+                           '{version}.analysis', 'sps-agn',
+                           'kc-params-{version}-{aperture}.fits')
+    spsfile = spsfile.format(version=old_version, aperture='AP04')
+    sps = fitsio.read(spsfile)
 
     print("Reading specs", flush=True)
     spstype = 'sps-agn'
     subdir = '.analysis'
     specfile = os.path.join(os.getenv('MNSA_DATA'),
-                            version + subdir, spstype,
+                            '{v}' + subdir, spstype,
                             'kc-spec-{v}-{a}.fits')
-    specfile = specfile.format(a='AP04', v=version)
+    specfile = specfile.format(a='AP04', v=old_version)
     wave = fitsio.read(specfile, ext='WAVE')
     spec = fitsio.read(specfile, ext='FLUX')
     agnspec = fitsio.read(specfile, ext='AGNFLUX')
@@ -56,8 +73,8 @@ if __name__ == '__main__':
     logssfr = pipe3d['log_SFR_ssp'] - pipe3d['log_Mass']
     w1w2 = sps['absmag'][:, 5] - sps['absmag'][:, 6]
 
-    good = ((summary['ipipe3d'] >= 0) & (sps['do_sps'] > 0))
-    isagn = (good) & (w1w2 > mnsa.agn.w1w2_condition(logssfr=logssfr))
+    good = ((pipe3d['plateifu'] != 'not_done') & (sps['do_sps'] > 0))
+    isagn = (good) & (w1w2 > magn.midir.w1w2_condition(logssfr=logssfr))
 
     # Make typical AGN spectrum (note there is a lot of variation!)
     inorm = np.argmin(np.abs(wave - 50000))
@@ -77,33 +94,48 @@ if __name__ == '__main__':
                           ('logssfr', np.float32),
                           ('log_nuLnu_w2', np.float32),
                           ('log_nuLnu_w3', np.float32),
-                          ('log_nuLnu_w2_limit', np.float32),
-                          ('log_nuLnu_w3_limit', np.float32)])
-    agn = np.zeros(len(summary), dtype=agn_dtype)
-    agn['plateifu'] = summary['plateifu']
+                          ('log_nuLnu_w2_agn', np.float32),
+                          ('log_nuLnu_w3_agn', np.float32),
+                          ('log_nuLnu_w2_agn_threshold', np.float32),
+                          ('log_nuLnu_w3_agn_threshold', np.float32),
+                          ('log_nuLnu_w2_agn_limit', np.float32),
+                          ('log_nuLnu_w3_agn_limit', np.float32)])
+    agn = np.zeros(len(drpall), dtype=agn_dtype)
+    agn['plateifu'] = drpall['plateifu']
     agn['good'] = good
     agn['logssfr'] = logssfr
     agn['w1w2'] = w1w2
     agn['log_nuLnu_w2'] = - 9999.
     agn['log_nuLnu_w3'] = - 9999.
-    agn['log_nuLnu_w2_limit'] = - 9999.
-    agn['log_nuLnu_w3_limit'] = - 9999.
+    agn['log_nuLnu_w2_agn'] = - 9999.
+    agn['log_nuLnu_w3_agn'] = - 9999.
+    agn['log_nuLnu_w2_agn_limit'] = - 9999.
+    agn['log_nuLnu_w2_agn_limit'] = - 9999.
+    agn['log_nuLnu_w3_agn_threshold'] = - 9999.
+    agn['log_nuLnu_w3_agn_threshold'] = - 9999.
+
+    w2_wave = 34000.
+    agn['log_nuLnu_w2'][good] = magn.midir.absmag_to_lognuLnu(absmag=sps['absmag'][good, 5],
+                                                              wave=w2_wave)
+    w3_wave = 46000.
+    agn['log_nuLnu_w3'][good] = magn.midir.absmag_to_lognuLnu(absmag=sps['absmag'][good, 6],
+                                                              wave=w3_wave)
 
     iagn = np.where(isagn)[0]
     for i in iagn:
         agn['isagn'][i] = True
         cspec = spec[i, :]
         cagnspec = agnspec[i, :]
-        lagn = mnsa.agn.agn_luminosity_w2w3(sps=sps[i], wave=wave,
-                                            spec=cspec, agnspec=cagnspec)
-        agn['log_nuLnu_w2'][i] = lagn['log_nuLnu_w2']
-        agn['log_nuLnu_w3'][i] = lagn['log_nuLnu_w3']
+        lagn = magn.midir.agn_luminosity_w2w3(sps=sps[i], wave=wave,
+                                              spec=cspec, agnspec=cagnspec)
+        agn['log_nuLnu_w2_agn'][i] = lagn['log_nuLnu_w2']
+        agn['log_nuLnu_w3_agn'][i] = lagn['log_nuLnu_w3']
 
-    ilimit = np.where(good & (agn['log_nuLnu_w2'] < 0))[0]
+    ilimit = np.where(good & (agn['log_nuLnu_w2_agn'] < 0))[0]
     for i in ilimit:
         # Get current limit on w2/w1
         clogssfr = logssfr[i]
-        cw1w2_limit = mnsa.agn.w1w2_condition(logssfr=clogssfr)
+        cw1w2_limit = magn.midir.w1w2_condition(logssfr=clogssfr)
         w2w1_ratio = 10.**(0.4 * cw1w2_limit)
 
         # Determine how much average AGN SED to add
@@ -116,13 +148,16 @@ if __name__ == '__main__':
         # Now get the luminosity this limiting factor corresponds to
         cagnspec = agnspec[i, :]
         lagnspec = cagnspec + agn_factor * agnavg
-        lagn = mnsa.agn.agn_luminosity_w2w3(sps=sps[i], wave=wave,
-                                            spec=cspec, agnspec=lagnspec)
-        agn['log_nuLnu_w2_limit'][i] = lagn['log_nuLnu_w2']
-        agn['log_nuLnu_w3_limit'][i] = lagn['log_nuLnu_w3']
+        lagn = magn.midir.agn_luminosity_w2w3(sps=sps[i], wave=wave,
+                                              spec=cspec, agnspec=lagnspec)
+        agn['log_nuLnu_w2_agn_threshold'][i] = lagn['log_nuLnu_w2']
+        agn['log_nuLnu_w3_agn_threshold'][i] = lagn['log_nuLnu_w3']
+        agn['log_nuLnu_w2_agn_limit'][i] = agn['log_nuLnu_w2'][i]
+        agn['log_nuLnu_w3_agn_limit'][i] = agn['log_nuLnu_w3'][i]
 
     agnfile = os.path.join(os.getenv('MNSA_DATA'),
-                           version + subdir, 'midir-agn',
+                           version + subdir, 'agn',
+                           'midir',
                            'midir-agn-{v}.fits')
     agnfile = agnfile.format(v=version)
     fitsio.write(agnfile, agn, clobber=True)

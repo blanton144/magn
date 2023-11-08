@@ -1,110 +1,95 @@
 import numpy as np
-import scipy.interpolate
 
 
-w1w2_grid = np.array([-0.5, -0.5, -0.3, -0.3], dtype=np.float32)
-logssfr_grid = np.array([-20., -11., -10., 20], dtype=np.float32)
-w1w2_interp = scipy.interpolate.interp1d(logssfr_grid, w1w2_grid,
-                                         bounds_error=False,
-                                         fill_value='extrapolate')
-
-
-def w1w2_condition(logssfr=None):
-    """Return condition on W1-W2 given galaxy properties
+def vdisp_to_logmbh(vdisp=None):
+    """Apply M-sigma to MaNGA velocity dispersion
 
     Parameters
     ----------
 
-    logssfr : np.float32, or ndarray of np.float32
-        log10 of specific SFR
+    vdisp : np.float32, or ndarray of np.float32
+        velocity dispersion
 
     Returns
     -------
 
-    w1w2 : np.float32, or ndarray of np.float32
-        condition(s) on W1-W2 (redder than condition means AGN)
+    logmbh : np.float32, or ndarray of np.float32
+        log10 of the black hole mass (solar masses)
+
+    Notes
+    -----
+
+    Uses Gultekin et al (2009):
+        log10 M = 8.12 + 4.24 log10(vdisp)
 """
-    w1w2 = w1w2_interp(logssfr)
-    return(w1w2)
+    logmbh = 8.12 + 4.24 * np.log10(vdisp / 200.)
+    return(logmbh)
 
 
-def absmag_to_lognuLnu(absmag=None, wave=None):
-    """Convert an absolute magnitude to log nu L_nu
+def logmbh_to_logledd(logmbh=None):
+    """Calculate Eddington ratio for a black hole mass
 
     Parameters
     ----------
 
-    absmag : np.float32
-        absolute magnitude (AB)
-
-    wave : np.float32
-        wavelength (Angstrom)
+    logmbh : np.float32, or ndarray of np.float32
+        log10 of the black hole mass (solar masses)
 
     Returns
     -------
 
-    lognulnu : np.float32
-       log_10 nu L_nu for this observation
+    logledd : np.float32, or ndarray of np.float32
+        log10 of the Eddington luminosity in erg/s
 """
-    logtenpc2_to_cm2 = 2. * (np.log10(3.086) + 19.)
-    logcspeed = np.log10(2.99792) + 18.  # Ang/s
-
-    logabsmaggies = (- 0.4 * absmag)
-    logLnu = logabsmaggies + np.log10(3631.) + logtenpc2_to_cm2 + np.log10(4. * np.pi) - 23.
-    lognu = logcspeed - np.log10(wave)
-    lognuLnu = lognu + logLnu
-    return(lognuLnu)
+    logledd = logmbh + 38 + np.log10(1.26)
+    return(logledd)
 
 
-def agn_luminosity_w2w3(sps=None, wave=None, spec=None, agnspec=None):
-    """Return estimated AGN luminosities in W2 and W3
+def logo3_to_logbolo(logo3=None):
+    """Conversion from OIII luminosity to bolometric
 
     Parameters
     ----------
 
-    sps : ndarray
-        structure with sps information (including 'redshift' and 'absmag')
-
-    wave : ndarray of np.float32
-        wavelengths of spectrum (Angstroms)
-
-    agnspec : ndarray of np.float32
-        AGN spectrum in erg/cm^2/s/A
-
-    spec : ndarray of np.float32
-        spectrum in erg/cm^2/s/A
+    logo3 : np.float32
+        log10 OIII in erg/s
 
     Returns
     -------
 
-    lagn : dict
-        dictionary with 'log_nuLnu_w2', 'log_nuLnu_w3' in erg/s
+    logbolo : np.float32
+        log10 bolometric in erg/s
+
+    Notes
+    -----
+    
+    Uses Lamastra et al (2009)
 """
-    spec_interp = scipy.interpolate.interp1d(wave, spec)
-    agnspec_interp = scipy.interpolate.interp1d(wave, agnspec)
+    logbolo = 40. + np.log10(112.) + 1.2 * (logo3 - 40.)
+    return(logbolo)
 
-    lagn = dict()
 
-    w2_wave = 34000.
-    log_nuLnu_w2_total = absmag_to_lognuLnu(absmag=sps['absmag'][5],
-                                            wave=w2_wave)
-    w2_agn = agnspec_interp(w2_wave)
-    w2_spec = spec_interp(w2_wave)
-    w2_agnfrac = w2_agn / w2_spec
-    if(w2_agnfrac > 0):
-        lagn['log_nuLnu_w2'] = np.log10(w2_agnfrac) + log_nuLnu_w2_total
-    else:
-        lagn['log_nuLnu_w2'] = -9999.
+def logw2_to_logbolo(logw2=None):
+    """Conversion from W2 luminosity to bolometric
 
-    w3_wave = 46000.
-    log_nuLnu_w3_total = absmag_to_lognuLnu(absmag=sps['absmag'][6],
-                                            wave=w3_wave)
-    w3_agn = agnspec_interp(w3_wave)
-    w3_spec = spec_interp(w3_wave)
-    w3_agnfrac = w3_agn / w3_spec
-    if(w3_agnfrac > 0):
-        lagn['log_nuLnu_w3'] = np.log10(w3_agnfrac) + log_nuLnu_w3_total
-    else:
-        lagn['log_nuLnu_w3'] = -9999.
+    Parameters
+    ----------
 
-    return(lagn)
+    logw2 : np.float32
+        nu Lnu in W2 in erg/s
+
+    Returns
+    -------
+
+    logbolo : np.float32
+        log10 bolometric in erg/s
+
+    Notes
+    -----
+    
+    Uses Stern (2015), then multiplies by 20 per Comerford
+"""
+    loglx = 40.981 + 1.024 * (logw2 - 41.) - 0.047 * (logw2 - 41.)**2
+    logbolo = loglx + np.log10(20.)
+    return(logbolo)
+

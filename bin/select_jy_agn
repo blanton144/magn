@@ -14,7 +14,7 @@ import magn.jiyan
 import mnsa.mnsautils
 
 
-def plot_o3_limit(redshift=None, cf=None, cf_ivar=None, agn_ratios=None):
+def plot_o3_threshold(redshift=None, cf=None, cf_ivar=None, agn_ratios=None):
     """Plot path in P1-P3 space
 
     Parameters
@@ -79,6 +79,9 @@ if __name__ == '__main__':
                         type=str, default=None, required=False,
                         help='debug this plate ifu')
 
+    parser.add_argument('-n', '--nsigma', dest='nsigma',
+                        type=np.float32, default=2., required=False)
+
     parser.add_argument('-o', '--old', dest='dr17',
                         required=False, help='dr17',
                         action='store_true',
@@ -89,6 +92,7 @@ if __name__ == '__main__':
     debug = args.debug
     dr17 = args.dr17
     plateifu = args.plateifu
+    nsigma = args.nsigma
 
     done = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
                                     '{v}.analysis', 'mnsa-done-{v}.fits').format(v=version))
@@ -99,7 +103,8 @@ if __name__ == '__main__':
     cf, cf_ivar, cf_nbad, good = magn.jiyan.read_central_flux(version=version,
                                                               dr17=dr17)
 
-    detected, isagn, lines = magn.jiyan.select_agn(cf=cf, cf_ivar=cf_ivar, good=good)
+    detected, isagn, lines = magn.jiyan.select_agn(cf=cf, cf_ivar=cf_ivar, good=good,
+                                                   nsigma=nsigma)
 
     # Find our AGN
     iagn = np.where(isagn)[0]
@@ -135,25 +140,45 @@ if __name__ == '__main__':
     agn_ratios['p2'] = agn_p2
     agn_ratios['p3'] = agn_p3
 
+    # For non-identified AGN, determine two numbers: (1) the limit on the
+    # [OIII] luminosity, and (2) the threshold [OIII] luminosity at which
+    # this object would have been identified as an AGN. The "limit" is
+    # just the actual [OIII] luminosity or the n-sigma upper limit on it.
+    # The "threshold" is how bright an AGN would have to be to be detected.
     ilimit = np.where((good) & (isagn == False))[0]
-    log_agn_luminosity_o3_limit = np.zeros(len(done), dtype=np.float32)
+    log_agn_luminosity_o3_limit = np.zeros(len(done), dtype=np.float32) - 9999.
+    log_agn_luminosity_o3_threshold = np.zeros(len(done), dtype=np.float32) - 9999.
     for i in ilimit:
+
+        # Calculate limit
+        if(lines['o3'][i] > 0):
+            logterm = mnsa.mnsautils.log_flux_to_luminosity(redshift=drpall['z'][i])
+            log_agn_luminosity_o3_limit[i] = np.log10(lines['o3'][i]) + logterm
+        elif(lines['o3_err'][i] > 0):
+            logterm = mnsa.mnsautils.log_flux_to_luminosity(redshift=drpall['z'][i])
+            log_agn_luminosity_o3_limit[i] = (np.log10(lines['o3_err'][i] * nsigma) +
+                                              logterm)
+            
+        # Now calculate the threshold
         ccf = dict()
         for k in cf:
             ccf[k] = cf[k][i:i + 1]
         ccf_ivar = dict()
         for k in cf_ivar:
             ccf_ivar[k] = cf_ivar[k][i:i + 1]
-        log_agn_luminosity_o3_limit[i] = magn.jiyan.find_o3_limit(redshift=drpall['z'][i:i + 1],
-                                                                  cf=ccf,
-                                                                  cf_ivar=ccf_ivar,
-                                                                  agn_ratios=agn_ratios)
+        log_agn_luminosity_o3_threshold[i] = magn.jiyan.find_o3_threshold(redshift=drpall['z'][i:i + 1],
+                                                                          cf=ccf,
+                                                                          cf_ivar=ccf_ivar,
+                                                                          agn_ratios=agn_ratios,
+                                                                          nsigma=nsigma)
+
+        # Some debugging plots
         if(debug & ((plateifu is None) |
                     (plateifu == drpall['plateifu'][i]))):
             plt.scatter(lines['p1'][detected], lines['p3'][detected], s=1, color='grey')
-            plot_o3_limit(redshift=drpall['z'][i:i + 1],
-                          cf=ccf, cf_ivar=ccf_ivar,
-                          agn_ratios=agn_ratios)
+            plot_o3_threshold(redshift=drpall['z'][i:i + 1],
+                              cf=ccf, cf_ivar=ccf_ivar,
+                              agn_ratios=agn_ratios)
             xmin = - 1.25
             xmax = 0.9
             ymin = - 0.3
@@ -163,7 +188,7 @@ if __name__ == '__main__':
             logterm = mnsa.mnsautils.log_flux_to_luminosity(redshift=drpall['z'][i])
             ol = np.log10(cf['OIII-5008'][i]) + logterm
             plt.title('ol={ol} logl={logl}'.format(ol=ol,
-                                                   logl=log_agn_luminosity_o3_limit[i]))
+                                                   logl=log_agn_luminosity_o3_threshold[i]))
             plt.savefig('debug.png')
 
             sys.exit()
@@ -179,6 +204,8 @@ if __name__ == '__main__':
                           ('p2_err', np.float32),
                           ('p3', np.float32),
                           ('p3_err', np.float32),
+                          ('o3', np.float32),
+                          ('o3_err', np.float32),
                           ('n2ha', np.float32),
                           ('n2ha_err', np.float32),
                           ('s2ha', np.float32),
@@ -186,6 +213,7 @@ if __name__ == '__main__':
                           ('o3hb', np.float32),
                           ('o3hb_err', np.float32),
                           ('log_luminosity_o3', np.float32),
+                          ('log_luminosity_o3_threshold', np.float32),
                           ('log_luminosity_o3_limit', np.float32)])
 
     agn = np.zeros(len(done), dtype=agn_dtype)
@@ -200,6 +228,8 @@ if __name__ == '__main__':
     agn['p1_err'] = lines['p1_err']
     agn['p2_err'] = lines['p2_err']
     agn['p3_err'] = lines['p3_err']
+    agn['o3'] = lines['o3']
+    agn['o3_err'] = lines['o3_err']
     agn['n2ha'] = lines['n2ha']
     agn['s2ha'] = lines['s2ha']
     agn['o3hb'] = lines['o3hb']
@@ -208,7 +238,9 @@ if __name__ == '__main__':
     agn['o3hb_err'] = lines['o3hb_err']
     agn['log_luminosity_o3'] = - 9999.
     agn['log_luminosity_o3_limit'] = - 9999.
+    agn['log_luminosity_o3_threshold'] = - 9999.
     agn['log_luminosity_o3'][iagn] = log_agn_luminosity_o3
+    agn['log_luminosity_o3_threshold'][ilimit] = log_agn_luminosity_o3_threshold[ilimit]
     agn['log_luminosity_o3_limit'][ilimit] = log_agn_luminosity_o3_limit[ilimit]
 
     agnfile = os.path.join(os.getenv('MNSA_DATA'),
