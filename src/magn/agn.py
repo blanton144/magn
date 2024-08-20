@@ -1,14 +1,17 @@
 import numpy as np
 
 
-def vdisp_to_logmbh(vdisp=None):
+def vdisp_to_logmbh(vdisp=None, version='gultekin09'):
     """Apply M-sigma to MaNGA velocity dispersion
 
     Parameters
     ----------
 
     vdisp : np.float32, or ndarray of np.float32
-        velocity dispersion
+        velocity dispersion (km/s)
+
+    version : str
+        version of relationship
 
     Returns
     -------
@@ -19,10 +22,31 @@ def vdisp_to_logmbh(vdisp=None):
     Notes
     -----
 
-    Uses Gultekin et al (2009):
-        log10 M = 8.12 + 4.24 log10(vdisp)
+    Uses relation of form: 
+        log10 M = alpha + beta * log10(vdisp / 200)
+
+    Versions available are:
+      'gultekin09' : Gultekin et al (2009): alpha=8.12, beta=4.24
+      'kormendy13' : Kormendy & Ho (2013): alpha=8.5, beta=4.4
+      'graham13' : Graham & Scott (2013): alpha=8.14, beta=5.2
+      'greene06' : Greene & Ho (2006): alpha=7.86, beta=3.65
 """
-    logmbh = 8.12 + 4.24 * np.log10(vdisp / 200.)
+    if(version == 'gultekin09'):
+        alpha = 8.12
+        beta = 4.24
+    elif(version == 'kormendy13'):
+        alpha = 8.5
+        beta = 4.4
+    elif(version == 'graham13'):
+        alpha = 8.14
+        beta = 5.2
+    elif(version == 'greene06'):
+        alpha = 7.86
+        beta = 3.65
+    else:
+        raise ValueError("No such version {v}".format(v=version))
+
+    logmbh = alpha + beta * np.log10(vdisp / 200.)
     return(logmbh)
 
 
@@ -45,14 +69,14 @@ def logmbh_to_logledd(logmbh=None):
     return(logledd)
 
 
-def logo3_to_logbolo(logo3=None):
-    """Conversion from OIII luminosity to bolometric
+def loglum_to_logbolo(loglum=None, version=''):
+    """Conversion from OIII or Hb luminosity to bolometric
 
     Parameters
     ----------
 
-    logo3 : np.float32
-        log10 OIII in erg/s
+    loglum : np.float32
+        log10 OIII or Hb in erg/s
 
     Returns
     -------
@@ -63,9 +87,22 @@ def logo3_to_logbolo(logo3=None):
     Notes
     -----
     
-    Uses Lamastra et al (2009)
+    Available versions:
+      'pennell17_nodust_o3' - based on OIII uncorrected for dust
+      'heckman04_nodust_o3' - based on OIII uncorrected for dust
+      'heckman04_dust_o3' - based on OIII corrected for dust
+      'netzer19_dust_hb' - based on Hb corrected for dust
 """
-    logbolo = 40. + np.log10(112.) + 1.2 * (logo3 - 40.)
+    if(version == 'pennell17_nodust_o3'):
+       logbolo = 46.058 + 0.5617 * (loglum - 42.5)
+    elif(version == 'heckman04_nodust_o3'):
+       logbolo = 3.544 + loglum
+    elif(version == 'heckman04_dust_o3'):
+       logbolo = 2.778 + loglum
+    elif(version == 'netzer19_dust_hb'):
+       logbolo = 45.661 + 1.18 * (loglum - 42.)
+    else:
+        raise ValueError("No such version {v}".format(v=version))
     return(logbolo)
 
 

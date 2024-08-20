@@ -52,12 +52,17 @@ if __name__ == '__main__':
     pipe3d['plateifu'] = 'not_done'
     pipe3d[idrp] = original_pipe3d[ipipe3d]
 
-    old_version = '0.3.1'
     spsfile = os.path.join(os.getenv('MNSA_DATA'),
                            '{version}.analysis', 'sps-agn',
                            'kc-params-{version}-{aperture}.fits')
-    spsfile = spsfile.format(version=old_version, aperture='AP04')
-    sps = fitsio.read(spsfile)
+    spsfile = spsfile.format(version=version, aperture='AP04')
+    original_sps = fitsio.read(spsfile)
+
+    cpi, idrp, isps = np.intersect1d(drpall['plateifu'], original_sps['plateifu'],
+                                     return_indices=True)
+    sps = np.zeros(len(drpall), dtype=original_sps.dtype)
+    sps['plateifu'] = 'not_done'
+    sps[idrp] = original_sps[isps]
 
     print("Reading specs", flush=True)
     spstype = 'sps-agn'
@@ -65,10 +70,16 @@ if __name__ == '__main__':
     specfile = os.path.join(os.getenv('MNSA_DATA'),
                             '{v}' + subdir, spstype,
                             'kc-spec-{v}-{a}.fits')
-    specfile = specfile.format(a='AP04', v=old_version)
+    specfile = specfile.format(a='AP04', v=version)
     wave = fitsio.read(specfile, ext='WAVE')
-    spec = fitsio.read(specfile, ext='FLUX')
-    agnspec = fitsio.read(specfile, ext='AGNFLUX')
+    original_spec = fitsio.read(specfile, ext='FLUX')
+    original_agnspec = fitsio.read(specfile, ext='AGNFLUX')
+
+    spec = np.zeros((len(sps), original_spec.shape[1]), dtype=np.float32)
+    spec[idrp, :] = original_spec[isps, :]
+
+    agnspec = np.zeros((len(sps), original_agnspec.shape[1]), dtype=np.float32)
+    agnspec[idrp, :] = original_agnspec[isps, :]
 
     logssfr = pipe3d['log_SFR_ssp'] - pipe3d['log_Mass']
     w1w2 = sps['absmag'][:, 5] - sps['absmag'][:, 6]

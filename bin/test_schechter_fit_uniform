@@ -1,0 +1,247 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import argparse
+import numpy as np
+import magn.schechter_likelihood
+import matplotlib.pyplot as plt
+import scipy.optimize
+import emcee
+import fitsio
+import scipy.integrate
+
+
+np.random.seed(102)
+
+
+def make_schechter_sample(alpha=None, log_lambda_min=None, log_lambda_max=1., log_lambda_star=0.):
+    """Make fake Schechter-distributed sample"""
+    x = magn.schechter_likelihood.schechter_sample(size=10000, alpha=alpha,
+                                                   log_x_min=log_lambda_min - log_lambda_star,
+                                                   log_x_max=log_lambda_max - log_lambda_star)
+    x = x * 10.**log_lambda_star
+    return(x)
+
+
+def plot_schechter_sample(filename=None, x=None, alpha=None, log_lambda_min=None,
+                          log_lambda_max=1., log_lambda_star=0., above=None):
+    """Plot random sample to compare to Schechter"""
+    hist, edges = np.histogram(np.log10(x), range=[log_lambda_min, log_lambda_max], bins=50)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    dlogx = centers[1] - centers[0]
+    plt.step(centers, np.log10(hist / len(x) / dlogx), where='mid', label='Full sample')
+
+    hist, edges = np.histogram(np.log10(x[above]), range=[log_lambda_min, log_lambda_max], bins=50)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    dlogx = centers[1] - centers[0]
+    plt.step(centers, np.log10(hist / len(x) / dlogx), where='mid', label='Selected sample')
+
+    integral = scipy.integrate.quad(
+        lambda y: 10.**y * np.log(10.) * magn.schechter_likelihood.schechter_function(x=10.**(y - log_lambda_star),
+                                                                                      alpha=alpha),
+        log_lambda_min, log_lambda_max)[0]
+
+    plt.plot(centers,
+             centers + np.log10(magn.schechter_likelihood.schechter_function(10.**(centers - log_lambda_star),
+                                                                             alpha=alpha) /
+                                integral) + np.log10(np.log(10.)))
+    
+    plt.ylabel(r'$\Phi(\lambda)$')
+    plt.xlabel(r'$\lambda$')
+    plt.legend()
+    plt.savefig(filename, dpi=300)
+    plt.close()
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(
+        prog=os.path.basename(sys.argv[0]),
+        description='Run schechter test')
+
+    parser.add_argument('-n', '--nmc', dest='nmc',
+                        type=np.int32, default=100,
+                        help='Number of MCs')
+
+    parser.add_argument('-c', '--clobber', dest='clobber',
+                        action='store_true', default=False,
+                        help='Clobber emcee results')
+
+    parser.add_argument('-p', '--params', dest='params',
+                        type=str, default='1.6,-5.0,0.2',
+                        help='correct params in form alpha,log_lambda_min,log_lambda_star)')
+
+    
+    args = parser.parse_args()
+    nmc = args.nmc
+    clobber = args.clobber
+    params = args.params
+    alpha_c, log_lambda_min_c, log_lambda_star_c = [np.float32(p) for p in params.split(',')]
+
+    xfake = make_schechter_sample(alpha=alpha_c, log_lambda_min=log_lambda_min_c,
+                                  log_lambda_star=log_lambda_star_c)
+
+    # Now set upper limits 
+    limit = 10.**(-3.5 + (-1. - (-3.5)) * np.random.random(len(xfake)))
+    
+    # Split data into detections and limits
+    above = (xfake > limit)
+    below = (xfake <= limit)
+    log_lambdas = np.log10(xfake[above])
+    log_lambda_limits = np.log10(limit[below])
+    properties = np.ones(len(log_lambdas), dtype=np.float32)
+    properties_limits = np.ones(len(log_lambda_limits), dtype=np.float32)
+    
+    plot_schechter_sample(filename='schechter-sample.png', x=xfake, above=above, alpha=alpha_c,
+                          log_lambda_min=log_lambda_min_c, log_lambda_star=log_lambda_star_c)
+
+    # Look at a grid of the neg log like
+    beta = 0.
+    log_lambda_star = 0.
+
+    nn = 40
+    alpha_grid = 0.5 + (2.5 - 0.5) * np.arange(nn) / np.float32(nn - 1)
+    dalpha = alpha_grid[1] - alpha_grid[0]
+    bottom = alpha_grid[0] - 0.5 * dalpha
+    top = alpha_grid[-1] + 0.5 * dalpha
+    llm_grid = (-6.) + ((-3.) - (-6.)) * np.arange(nn) / np.float32(nn - 1)
+    dllm = llm_grid[1] - llm_grid[0]
+    left = llm_grid[0] - 0.5 * dllm
+    right = llm_grid[-1] + 0.5 * dllm
+
+    # Create likelihood object
+    schlike = magn.schechter_likelihood.SchechterLikelihood(log_lambdas=log_lambdas,
+                                                            log_lambda_limits=log_lambda_limits,
+                                                            properties=properties,
+                                                            properties_limits=properties_limits)
+    
+    nll = np.zeros((len(alpha_grid), len(llm_grid)), dtype=np.float32)
+    fabove = np.zeros((len(alpha_grid), len(llm_grid)), dtype=np.float32)
+    for i, alpha in enumerate(alpha_grid):
+        print(i)
+        for j, log_lambda_min in enumerate(llm_grid):
+            theta = [alpha, log_lambda_star, log_lambda_min]
+            fabove[i, j] = magn.schechter_likelihood.Fabove(alpha=alpha, log_lambda_star=log_lambda_star,
+                                                            log_lambda_min=log_lambda_min, log_lambda_max=1.,
+                                                            log_lambda_c=-2.5)
+            nll[i, j] = - schlike(theta)
+            
+    plt.imshow(nll - nll.min(), vmin=0., vmax=100, extent=[left, right, bottom, top],
+               cmap='Greys_r', origin='lower')
+    plt.colorbar(label='delta negative log likelihood')
+    CS = plt.contour(np.log10(fabove), extent=[left, right, bottom, top], origin='lower',
+                     levels=-4. + np.arange(30) * 0.3)
+    plt.clabel(CS, CS.levels, inline=True, fontsize=10)
+
+    plt.xlabel('log10 lambda_min')
+    plt.ylabel('alpha')
+    plt.savefig('schechter_nll_grid.png', dpi=300)
+    plt.close()
+
+    # Run a bunch of different cases to get mean and variance of MLE fit
+    fit_dtype = np.dtype([('alpha', np.float32),
+                          ('log_lambda_star', np.float32),
+                          ('log_lambda_min', np.float32),
+                          ('Fagn_2_0', np.float32),
+                          ('Fagn_2_5', np.float32),
+                          ('Fagn_3_0', np.float32),
+                          ('Fagn_3_5', np.float32)])
+
+    fit = np.zeros(nmc, dtype=fit_dtype)
+    for imc in np.arange(nmc, dtype=np.int32):
+        print("MC run #{i}".format(i=imc), flush=True)
+        xfake = make_schechter_sample(alpha=alpha_c, log_lambda_min=log_lambda_min_c,
+                                      log_lambda_star=log_lambda_star_c)
+
+        # Now set upper limits 
+        limit = 10.**(-3.5 + (-1. - (-3.5)) * np.random.random(len(xfake)))
+
+        # Split data into detections and limits
+        above = (xfake > limit)
+        below = (xfake <= limit)
+        log_lambdas = np.log10(xfake[above])
+        log_lambda_limits = np.log10(limit[below])
+        properties = np.ones(len(log_lambdas), dtype=np.float32)
+        properties_limits = np.ones(len(log_lambda_limits), dtype=np.float32)
+
+        # Create likelihood object
+        schlike = magn.schechter_likelihood.SchechterLikelihood(log_lambdas=log_lambdas,
+                                                                log_lambda_limits=log_lambda_limits,
+                                                                properties=properties,
+                                                                properties_limits=properties_limits)
+
+        # Optimize the likelihood
+        log_lambda_star_st = -0.5 + np.random.normal() * 0.2
+        alpha_st = 1.5 + np.random.normal() * 0.2
+        log_lambda_min_st = -4. + np.random.normal() * 0.2
+        theta_st = np.array([alpha_st, log_lambda_star_st, log_lambda_min_st])
+        schlike.sign = - 1.  # minimize instead of maximize
+        r = scipy.optimize.minimize(schlike, theta_st, method='Nelder-Mead')
+        fit['alpha'][imc] = r.x[0]
+        fit['log_lambda_star'][imc] = r.x[1]
+        fit['log_lambda_min'][imc] = r.x[2]
+        fit['Fagn_2_0'][imc] = magn.schechter_likelihood.Fabove(alpha=fit['alpha'][imc],
+                                                                log_lambda_star=fit['log_lambda_star'][imc],
+                                                                log_lambda_min=fit['log_lambda_min'][imc],
+                                                                log_lambda_c=-2.0)
+        fit['Fagn_2_5'][imc] = magn.schechter_likelihood.Fabove(alpha=fit['alpha'][imc],
+                                                                log_lambda_star=fit['log_lambda_star'][imc],
+                                                                log_lambda_min=fit['log_lambda_min'][imc],
+                                                                log_lambda_c=-2.5)
+        fit['Fagn_3_0'][imc] = magn.schechter_likelihood.Fabove(alpha=fit['alpha'][imc],
+                                                                log_lambda_star=fit['log_lambda_star'][imc],
+                                                                log_lambda_min=fit['log_lambda_min'][imc],
+                                                                log_lambda_c=-3.0)
+        fit['Fagn_3_5'][imc] = magn.schechter_likelihood.Fabove(alpha=fit['alpha'][imc],
+                                                                log_lambda_star=fit['log_lambda_star'][imc],
+                                                                log_lambda_min=fit['log_lambda_min'][imc],
+                                                                log_lambda_c=-3.5)
+
+    fitsio.write('schechter-mc-fits.fits', fit, clobber=True)
+
+    # Now run emcee
+    nwalkers = 16
+    ndim = 3
+    log_lambda_star_st = -0.5 + np.random.normal() * 0.2
+    alpha_st = 1.5 + np.random.normal() * 0.2
+    log_lambda_min_st = -4. + np.random.normal() * 0.2
+    theta_st = np.array([alpha_st, log_lambda_star_st, log_lambda_min_st])
+    theta_0 = (np.outer(np.ones(nwalkers), theta_st) +
+               np.random.normal(size=(nwalkers, ndim)) * 0.2)
+    schlike.sign = 1.  # maximize
+    sampler = emcee.EnsembleSampler(nwalkers, ndim, schlike)
+    print("emcee Burn-in", flush=True)
+    state = sampler.run_mcmc(theta_0, 100)
+    sampler.reset()
+    print("emcee Run", flush=True)
+    sampler.run_mcmc(state, 2500)
+    print("Mean acceptance fraction: {0:.3f}".format(np.mean(sampler.acceptance_fraction)), flush=True)
+    print("Mean autocorrelation time: {0:.3f}".format(np.mean(sampler.get_autocorr_time())), flush=True)
+
+    chain_vals = sampler.get_chain(flat=True)
+    chain = np.zeros(chain_vals.shape[0], dtype=fit_dtype)
+
+    for i in np.arange(len(chain), dtype=np.int32):
+        if((i % 1000) == 0):
+            print(i, flush=True)
+        chain['alpha'][i] = chain_vals[i, 0]
+        chain['log_lambda_star'][i] = chain_vals[i, 1]
+        chain['log_lambda_min'][i] = chain_vals[i, 2]
+        chain['Fagn_2_0'][i] = magn.schechter_likelihood.Fabove(alpha=chain['alpha'][i],
+                                                                log_lambda_star=chain['log_lambda_star'][i],
+                                                                log_lambda_min=chain['log_lambda_min'][i],
+                                                                log_lambda_c=-2.0)
+        chain['Fagn_2_5'][i] = magn.schechter_likelihood.Fabove(alpha=chain['alpha'][i],
+                                                                log_lambda_star=chain['log_lambda_star'][i],
+                                                                log_lambda_min=chain['log_lambda_min'][i],
+                                                                log_lambda_c=-2.5)
+        chain['Fagn_3_0'][i] = magn.schechter_likelihood.Fabove(alpha=chain['alpha'][i],
+                                                                log_lambda_star=chain['log_lambda_star'][i],
+                                                                log_lambda_min=chain['log_lambda_min'][i],
+                                                                log_lambda_c=-3.0)
+        chain['Fagn_3_5'][i] = magn.schechter_likelihood.Fabove(alpha=chain['alpha'][i],
+                                                                log_lambda_star=chain['log_lambda_star'][i],
+                                                                log_lambda_min=chain['log_lambda_min'][i],
+                                                                log_lambda_c=-3.5)
+        
+    fitsio.write('schechter-emcee-chain.fits', chain, clobber=True)

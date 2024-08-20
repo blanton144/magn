@@ -5,6 +5,7 @@ import astropy.io.fits
 import matplotlib.pyplot as plt
 import scipy.interpolate
 import fitsio
+import magn.balmer
 import mnsa.mnsautils
 
 
@@ -191,6 +192,50 @@ def would_be_agn(cf=None, cf_ivar=None, agn_ratios=None, log_flux_o3=None, nsigm
     return(detected, isagn, lines)
 
 
+def proc_channel(channel=None, cf=None, cf_ivar=None, good=None, nsigma=None):
+    """Process a channel to get fluxes and errors
+
+    Parameters
+    ----------
+
+    cf : dict of ndarrays of np.float32
+        fluxes for each line
+
+    cf_ivar : dict of ndarrays of np.float32
+        inverse variance of fluxes for each line
+
+    good : ndarray of bool
+        whether to check each galaxy
+
+    nsigma : np.float32
+        number of sigma to consider detected
+
+    Returns
+    -------
+
+    flux : ndarray of np.float32
+        flux for detected lines
+
+    err : ndarray of np.float32
+        error for good lines
+
+    detected : ndarray of bool
+        is flux detected?
+
+    good : ndarray of bool
+        is channel good (i.e. good errors)?
+"""
+    
+    detected = good.copy()
+    detected[good] = (detected[good] & (cf[channel][good] *
+                                        np.sqrt(cf_ivar[channel][good]) > nsigma))
+    flux = cf[channel][detected]
+    err_good = good.copy()
+    err_good[good] = (err_good[good] & (cf_ivar[channel][good] > 0.))
+    err = 1. / np.sqrt(cf_ivar[channel][err_good])
+    return(flux, err, detected, err_good)
+
+
 def select_agn(cf=None, cf_ivar=None, good=None, p1_threshold=-0.3, p3_threshold=0.55,
                nsigma=2.):
     """Select AGN using P1 and P3
@@ -245,16 +290,23 @@ def select_agn(cf=None, cf_ivar=None, good=None, p1_threshold=-0.3, p3_threshold
         detected[good] = (detected[good] & (cf[channel][good] *
                                             np.sqrt(cf_ivar[channel][good]) > nsigma))
 
-    o3_detected = good.copy()
-    channel = 'OIII-5008'
-    o3_detected[good] = (o3_detected[good] & (cf[channel][good] *
-                                              np.sqrt(cf_ivar[channel][good]) > nsigma))
-    o3 = cf[channel][o3_detected]
+    o3, o3_err, o3_detected, o3_good = proc_channel(channel='OIII-5008', cf=cf,
+                                                    cf_ivar=cf_ivar, nsigma=nsigma, good=good)
 
-    o3_good = good.copy()
-    channel = 'OIII-5008'
-    o3_good[good] = (o3_good[good] & (cf_ivar[channel][good] > 0.))
-    o3_err = 1. / np.sqrt(cf_ivar[channel][o3_good])
+    ha, ha_err, ha_detected, ha_good = proc_channel(channel='Ha-6564', cf=cf,
+                                                    cf_ivar=cf_ivar, nsigma=nsigma, good=good)
+
+    hb, hb_err, hb_detected, hb_good = proc_channel(channel='Hb-4862', cf=cf,
+                                                    cf_ivar=cf_ivar, nsigma=nsigma, good=good)
+
+    hahb_detected = ha_detected & hb_detected
+    ha_full = np.zeros(len(ha_detected), dtype=np.float32)
+    ha_full[ha_detected] = ha
+    hb_full = np.zeros(len(hb_detected), dtype=np.float32)
+    hb_full[hb_detected] = hb
+    hahb = ha_full[hahb_detected] / hb_full[hahb_detected]
+    hahb_err = (1. / np.log(10.)) * np.sqrt(1. / (cf_ivar['Hb-4862'][hahb_detected] * cf['Hb-4862'][hahb_detected]**2) +
+                                            1. / (cf_ivar['Ha-6564'][hahb_detected] * cf['Ha-6564'][hahb_detected]**2))
 
     n2ha = np.log10(cf['NII-6585'][detected] / cf['Ha-6564'][detected])
     n2ha_err = (1. / np.log(10.)) * np.sqrt(1. / (cf_ivar['NII-6585'][detected] * cf['NII-6585'][detected]**2) +
@@ -274,9 +326,27 @@ def select_agn(cf=None, cf_ivar=None, good=None, p1_threshold=-0.3, p3_threshold
                                                           n2ha_err=n2ha_err,
                                                           s2ha_err=s2ha_err,
                                                           o3hb_err=o3hb_err)
-    
+
+    hahb_av = magn.balmer.balmer_to_av(hahb=hahb)
+
     lines_dtype = np.dtype([('o3', np.float32),
                             ('o3_err', np.float32),
+                            ('o3_corr', np.float32),
+                            ('o3_corr_err', np.float32),
+                            ('ha', np.float32),
+                            ('ha_err', np.float32),
+                            ('ha_corr', np.float32),
+                            ('ha_corr_err', np.float32),
+                            ('hb', np.float32),
+                            ('hb_err', np.float32),
+                            ('hb_corr', np.float32),
+                            ('hb_corr_err', np.float32),
+                            ('hahb', np.float32),
+                            ('hahb_err', np.float32),
+                            ('hahb_av', np.float32),
+                            ('ha_dust_correction', np.float32),
+                            ('hb_dust_correction', np.float32),
+                            ('o3_dust_correction', np.float32),
                             ('n2ha', np.float32),
                             ('n2ha_err', np.float32),
                             ('s2ha', np.float32),
@@ -293,6 +363,15 @@ def select_agn(cf=None, cf_ivar=None, good=None, p1_threshold=-0.3, p3_threshold
     lines = np.zeros(len(good), dtype=lines_dtype)
     lines['o3'] = - 9999
     lines['o3_err'] = - 9999
+    lines['o3_corr'] = - 9999
+    lines['o3_corr_err'] = - 9999
+    lines['hb'] = - 9999
+    lines['hb_err'] = - 9999
+    lines['hb_corr'] = - 9999
+    lines['hb_corr_err'] = - 9999
+    lines['hahb'] = - 9999
+    lines['hahb_err'] = - 9999
+    lines['hahb_av'] = - 9999
     lines['n2ha'] = - 9999
     lines['n2ha_err'] = - 9999
     lines['s2ha'] = - 9999
@@ -305,9 +384,18 @@ def select_agn(cf=None, cf_ivar=None, good=None, p1_threshold=-0.3, p3_threshold
     lines['p2_err'] = - 9999
     lines['p3'] = - 9999
     lines['p3_err'] = - 9999
+    lines['o3_dust_correction'] = - 9999
+    lines['ha_dust_correction'] = - 9999
+    lines['hb_dust_correction'] = - 9999
 
     lines['o3'][o3_detected] = o3
     lines['o3_err'][o3_good] = o3_err
+    lines['hb'][hb_detected] = hb
+    lines['hb_err'][hb_good] = hb_err
+    lines['ha'][ha_detected] = ha
+    lines['ha_err'][ha_good] = ha_err
+    lines['hahb'][hahb_detected] = hahb
+    lines['hahb_err'][hahb_detected] = hahb_err
     lines['n2ha'][detected] = n2ha
     lines['n2ha_err'][detected] = n2ha_err
     lines['s2ha'][detected] = s2ha
@@ -320,6 +408,24 @@ def select_agn(cf=None, cf_ivar=None, good=None, p1_threshold=-0.3, p3_threshold
     lines['p2_err'][detected] = p2_err
     lines['p3'][detected] = p3
     lines['p3_err'][detected] = p3_err
+
+    lines['hahb_av'][hahb_detected] = hahb_av
+
+    o3hahb = hahb_detected & o3_good
+    o3_factor = magn.balmer.dust_correction(a_v=lines['hahb_av'][o3hahb], wave=5007.)
+    lines['o3_corr'][o3hahb] = lines['o3'][o3hahb] * o3_factor
+    lines['o3_corr_err'][o3hahb] = lines['o3_err'][o3hahb] * o3_factor
+    lines['o3_dust_correction'][o3hahb] = o3_factor
+
+    hb_factor = magn.balmer.dust_correction(a_v=lines['hahb_av'][hahb_detected], wave=4861.)
+    lines['hb_corr'][hahb_detected] = lines['hb'][hahb_detected] * hb_factor
+    lines['hb_corr_err'][hahb_detected] = lines['hb_err'][hahb_detected] * hb_factor
+    lines['hb_dust_correction'][hahb_detected] = hb_factor
+
+    ha_factor = magn.balmer.dust_correction(a_v=lines['hahb_av'][hahb_detected], wave=6563.)
+    lines['ha_corr'][hahb_detected] = lines['ha'][hahb_detected] * ha_factor
+    lines['ha_corr_err'][hahb_detected] = lines['ha_err'][hahb_detected] * ha_factor
+    lines['ha_dust_correction'][hahb_detected] = ha_factor
 
     isagn = ((detected) & (lines['p1'] > p1_threshold) &
              (lines['p3'] > p3_threshold))
@@ -393,7 +499,11 @@ def find_o3_threshold(redshift=None, cf=None, cf_ivar=None, agn_ratios=None,
     log_flux_o3_threshold = 0.5 * (bounds[1] + bounds[0])
     log_flux_o3_total = np.log10(cf['OIII-5008'] + 10.**log_flux_o3_threshold)
     log_luminosity_o3_threshold = log_flux_o3_total + logterm
-    return(log_luminosity_o3_threshold)
+    log_flux_hb_total = np.log10(cf['Hb-4862'] + 10.**(log_flux_o3_threshold - agn_ratios['o3hb']))
+    log_luminosity_hb_threshold = log_flux_hb_total + logterm
+    log_flux_ha_total = np.log10(cf['Ha-6564'] + 10.**(log_flux_o3_threshold - agn_ratios['o3ha']))
+    log_luminosity_ha_threshold = log_flux_ha_total + logterm
+    return(log_luminosity_o3_threshold, log_luminosity_ha_threshold, log_luminosity_hb_threshold)
 
 
 class JiYan(object):

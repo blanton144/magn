@@ -43,18 +43,17 @@ if __name__ == '__main__':
 
     varfile = os.path.join(os.getenv('MNSA_DATA'),
                            version + '.analysis', 'agn',
-                           'midir', 'wise_statistics-0.2.0.fits')
+                           'var', 'wise_statistics-7.2.4.fits')
     original_var = fitsio.read(varfile)
     cpi, idrp, ioriginal_var = np.intersect1d(agn['plateifu'],
-                                              original_var['plateIFU'],
+                                              original_var['plateifu'],
                                               return_indices=True)
     var = np.zeros(len(agn), dtype=original_var.dtype)
-    var['plateIFU'] = 'not_matched'
+    var['plateifu'] = 'not_matched'
     var[idrp] = original_var[ioriginal_var]
-    isvar = ((var['plateIFU'] == agn['plateifu']) &
-             (np.log10(var['expected var all epochs (mags)']) < - 3.2) &
-             (np.log10(var['observed var']) > - 2.))
-    print(isvar.sum())
+    isvar = ((var['plateifu'] == agn['plateifu']) &
+             (np.log10(var['expected_W2_var_all_mags']) < - 3.) &
+             (np.log10(var['observed_W2_var']) > - 2.3))
 
     w1w2 = agn['w1w2']
     logssfr = agn['logssfr']
@@ -63,13 +62,22 @@ if __name__ == '__main__':
     fig, ax = plt.subplots()
 
     iagn = np.where(agn['isagn'])[0]
+
+
+    print((((agn['isagn'] > 0)) & (good)).sum())
+    either = ((agn['isagn'] > 0) | (isvar > 0)) & (good)
+    print(either.sum())
+
+    ii = np.where(either & (logssfr < -12.))[0]
+    print(agn['plateifu'][ii])
+    
     ax.scatter(logssfr[good], w1w2[good], s=6, alpha=0.1, color='black',
                label=r'{\rm MaNGA galaxies}')
-    ax.scatter(logssfr[iagn], w1w2[iagn], s=12, alpha=0.6, color='red',
+    ax.scatter(logssfr[iagn], w1w2[iagn], s=20, alpha=0.6, color='red',
                label=r'{\rm MaNGA mid-IR AGN}')
 
     ivar = np.where(isvar & good)[0]
-    ax.scatter(logssfr[ivar], w1w2[ivar], s=8, alpha=0.6, color='blue',
+    ax.scatter(logssfr[ivar], w1w2[ivar], s=20, alpha=0.9, color='cornflowerblue',
                label=r'{\rm Mid-IR Variable}')
 
     ngrid = 10000
@@ -84,7 +92,7 @@ if __name__ == '__main__':
     ax.set_ylabel(r'{\rm W1}$-${\rm W2}')
     ax.plot([-15., 5.], [-0.154, -0.154], linestyle='dotted',
             linewidth=1, color='black')
-    ax.text(-13.40, -0.09, '{\it Assef et al (2018) criterion}', va='bottom',
+    ax.text(-13.40, -0.09, '{\it Ref. [2] criterion}', va='bottom',
             ha='left', fontsize=13,
             bbox=dict(facecolor='white', alpha=0.6, boxstyle='round',
                       edgecolor='grey'))

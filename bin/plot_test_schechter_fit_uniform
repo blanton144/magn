@@ -1,0 +1,66 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import argparse
+import numpy as np
+import magn.schechter_likelihood
+import matplotlib.pyplot as plt
+import scipy.optimize
+import emcee
+import fitsio
+import scipy.integrate
+
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(
+        prog=os.path.basename(sys.argv[0]),
+        description='Plot schechter test')
+
+
+    fit = fitsio.read('schechter-mc-fits.fits')
+    chain = fitsio.read('schechter-emcee-chain.fits')
+    
+    print("fit alpha = {a:0.4f} +/- {s:0.4f}".format(a=fit['alpha'].mean(),
+                                                     s=fit['alpha'].std()))
+    print("chains error = {s:0.4f}".format(s=chain['alpha'].std()))
+    
+    print("fit log_lambda_min = {a:0.4f} +/- {s:0.4f}".format(a=fit['log_lambda_min'].mean(),
+                                                              s=fit['log_lambda_min'].std()))
+    print("chains error = {s:0.4f}".format(s=chain['log_lambda_min'].std()))
+    
+    print("fit log_lambda_star = {a:0.4f} +/- {s:0.4f}".format(a=fit['log_lambda_star'].mean(),
+                                                               s=fit['log_lambda_star'].std()))
+    print("chains error = {s:0.4f}".format(s=chain['log_lambda_star'].std()))
+    
+    fig, ax = plt.subplots(2, 2, gridspec_kw={'hspace': 0.4, 'wspace': 0.4})
+
+    ax[0, 0].scatter(chain['log_lambda_min'], chain['alpha'], s=3, alpha=0.01,
+                     c=np.log10(chain['Fagn_2_5']))
+    ax[0, 0].set_xlabel('log lambda min')
+    ax[0, 0].set_ylabel('alpha')
+    
+    ax[0, 1].scatter(chain['log_lambda_star'], chain['alpha'], s=3, alpha=0.01,
+                     c=np.log10(chain['Fagn_2_5']))
+    ax[0, 1].set_xlabel('log lambda star')
+    ax[0, 1].set_ylabel('alpha')
+    
+    ax[1, 0].scatter(chain['log_lambda_min'], chain['log_lambda_star'], s=3, alpha=0.01,
+                     c=np.log10(chain['Fagn_2_5']))
+    ax[1, 0].set_xlabel('log lambda min')
+    ax[1, 0].set_ylabel('log lambda star')
+
+    for nm in ['2_0', '2_5', '3_0', '3_5']:
+        x = chain['Fagn_{nm}'.format(nm=nm)]
+        hist, edges = np.histogram(np.log10(x), range=[-3, - 0.5], bins=200)
+        centers = 0.5 * (edges[:-1] + edges[1:])
+        dlogx = centers[1] - centers[0]
+        ax[1, 1].step(centers, (hist / len(x) / dlogx), where='mid',
+                      label='{nm} (sig= {s:0.4f}'.format(nm=nm, s=np.log10(x).std()))
+    ax[1, 1].set_xlabel('F_AGN')
+    ax[1, 1].legend(fontsize=8)
+    
+    plt.savefig('schechter-emcee-chains.png', dpi=300)
+    plt.close()
+    

@@ -171,10 +171,14 @@ if __name__ == '__main__':
     
     plt.tight_layout()
 
+    if(dr17):
+        drtxt = '-dr17'
+    else:
+        drtxt = ''
     pngfile = os.path.join(os.getenv('MNSA_DATA'),
                            version + '.analysis', 'agn',
-                           'jiyan', 'jiyan-agn-select-{v}.png')
-    pngfile = pngfile.format(v=version)
+                           'jiyan', 'jiyan-agn{d}-select-{v}.png')
+    pngfile = pngfile.format(v=version, d=drtxt)
     plt.savefig(pngfile, dpi=300)
     subprocess.run(['convert', pngfile, '-trim', pngfile])
 

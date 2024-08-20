@@ -14,6 +14,11 @@ import magn.jiyan
 import mnsa.mnsautils
 
 
+# TODO:
+# - add balmer decrement
+# - add various Lbol choices
+
+
 def plot_o3_threshold(redshift=None, cf=None, cf_ivar=None, agn_ratios=None):
     """Plot path in P1-P3 space
 
@@ -68,7 +73,7 @@ if __name__ == '__main__':
         description='Select Ji and Yan-style AGN.')
 
     parser.add_argument('-v', '--version', dest='version',
-                        type=str, default='0.3.1',
+                        type=str, default='0.3.2',
                         help='MNSA configuration version')
 
     parser.add_argument('-d', '--debug', dest='debug',
@@ -110,9 +115,15 @@ if __name__ == '__main__':
     iagn = np.where(isagn)[0]
 
     # Determine fluxes
-    log_agn_flux_o3 = np.log10(cf['OIII-5008'][iagn])
     logterm = mnsa.mnsautils.log_flux_to_luminosity(redshift=drpall['z'][iagn])
+    log_agn_flux_o3 = np.log10(lines['o3'][iagn])
     log_agn_luminosity_o3 = log_agn_flux_o3 + logterm
+    log_agn_flux_o3_corr = np.log10(lines['o3_corr'][iagn])
+    log_agn_luminosity_o3_corr = log_agn_flux_o3_corr + logterm
+    log_agn_flux_hb = np.log10(lines['hb'][iagn])
+    log_agn_luminosity_hb = log_agn_flux_hb + logterm
+    log_agn_flux_hb_corr = np.log10(lines['hb_corr'][iagn])
+    log_agn_luminosity_hb_corr = log_agn_flux_hb_corr + logterm
 
     # Find typical line ratios relative to OIII
     n2o3 = cf['NII-6585'][iagn] / cf['OIII-5008'][iagn]
@@ -132,6 +143,10 @@ if __name__ == '__main__':
     agn_ratios['n2ha'] = np.log10(agn_ratios['NII-6585'] / agn_ratios['Ha-6564'])
     agn_ratios['s2ha'] = np.log10(agn_ratios['SII-6718+6732'] / agn_ratios['Ha-6564'])
     agn_ratios['o3hb'] = np.log10(agn_ratios['OIII-5008'] / agn_ratios['Hb-4862'])
+    agn_ratios['o3ha'] = np.log10(agn_ratios['OIII-5008'] / agn_ratios['Ha-6564'])
+    agn_ratios['o3_dust_correction'] = np.median(lines['o3_dust_correction'][iagn])
+    agn_ratios['ha_dust_correction'] = np.median(lines['ha_dust_correction'][iagn])
+    agn_ratios['hb_dust_correction'] = np.median(lines['hb_dust_correction'][iagn])
 
     agn_p1, agn_p2, agn_p3 = magn.jiyan.ratios_to_pspace(n2ha=agn_ratios['n2ha'],
                                                          s2ha=agn_ratios['s2ha'],
@@ -140,25 +155,19 @@ if __name__ == '__main__':
     agn_ratios['p2'] = agn_p2
     agn_ratios['p3'] = agn_p3
 
-    # For non-identified AGN, determine two numbers: (1) the limit on the
-    # [OIII] luminosity, and (2) the threshold [OIII] luminosity at which
-    # this object would have been identified as an AGN. The "limit" is
+    # For non-identified AGN, determine the threshold [OIII] luminosity at
+    # which this object would have been identified as an AGN. The "limit" is
     # just the actual [OIII] luminosity or the n-sigma upper limit on it.
     # The "threshold" is how bright an AGN would have to be to be detected.
     ilimit = np.where((good) & (isagn == False))[0]
-    log_agn_luminosity_o3_limit = np.zeros(len(done), dtype=np.float32) - 9999.
     log_agn_luminosity_o3_threshold = np.zeros(len(done), dtype=np.float32) - 9999.
+    log_agn_luminosity_hb_threshold = np.zeros(len(done), dtype=np.float32) - 9999.
+    log_agn_luminosity_ha_threshold = np.zeros(len(done), dtype=np.float32) - 9999.
+    log_agn_luminosity_o3_corr_threshold = np.zeros(len(done), dtype=np.float32) - 9999.
+    log_agn_luminosity_hb_corr_threshold = np.zeros(len(done), dtype=np.float32) - 9999.
+    log_agn_luminosity_ha_corr_threshold = np.zeros(len(done), dtype=np.float32) - 9999.
     for i in ilimit:
 
-        # Calculate limit
-        if(lines['o3'][i] > 0):
-            logterm = mnsa.mnsautils.log_flux_to_luminosity(redshift=drpall['z'][i])
-            log_agn_luminosity_o3_limit[i] = np.log10(lines['o3'][i]) + logterm
-        elif(lines['o3_err'][i] > 0):
-            logterm = mnsa.mnsautils.log_flux_to_luminosity(redshift=drpall['z'][i])
-            log_agn_luminosity_o3_limit[i] = (np.log10(lines['o3_err'][i] * nsigma) +
-                                              logterm)
-            
         # Now calculate the threshold
         ccf = dict()
         for k in cf:
@@ -166,12 +175,24 @@ if __name__ == '__main__':
         ccf_ivar = dict()
         for k in cf_ivar:
             ccf_ivar[k] = cf_ivar[k][i:i + 1]
-        log_agn_luminosity_o3_threshold[i] = magn.jiyan.find_o3_threshold(redshift=drpall['z'][i:i + 1],
-                                                                          cf=ccf,
-                                                                          cf_ivar=ccf_ivar,
-                                                                          agn_ratios=agn_ratios,
-                                                                          nsigma=nsigma)
 
+        tmp_o3, tmp_ha, tmp_hb = magn.jiyan.find_o3_threshold(redshift=drpall['z'][i:i + 1],
+                                                              cf=ccf,
+                                                              cf_ivar=ccf_ivar,
+                                                              agn_ratios=agn_ratios,
+                                                              nsigma=nsigma)
+        log_agn_luminosity_o3_threshold[i] = tmp_o3
+        log_agn_luminosity_hb_threshold[i] = tmp_hb
+        log_agn_luminosity_ha_threshold[i] = tmp_ha
+        if(lines['o3_dust_correction'][i] == -9999.):
+            log_agn_luminosity_o3_corr_threshold[i] = tmp_o3 + agn_ratios['o3_dust_correction']
+            log_agn_luminosity_hb_corr_threshold[i] = tmp_hb + agn_ratios['hb_dust_correction']
+            log_agn_luminosity_ha_corr_threshold[i] = tmp_ha + agn_ratios['ha_dust_correction']
+        else:
+            log_agn_luminosity_o3_corr_threshold[i] = tmp_o3 + np.log10(lines['o3_dust_correction'][i])
+            log_agn_luminosity_hb_corr_threshold[i] = tmp_hb + np.log10(lines['hb_dust_correction'][i])
+            log_agn_luminosity_ha_corr_threshold[i] = tmp_ha + np.log10(lines['ha_dust_correction'][i])
+        
         # Some debugging plots
         if(debug & ((plateifu is None) |
                     (plateifu == drpall['plateifu'][i]))):
@@ -212,9 +233,24 @@ if __name__ == '__main__':
                           ('s2ha_err', np.float32),
                           ('o3hb', np.float32),
                           ('o3hb_err', np.float32),
+                          ('hahb', np.float32),
+                          ('hahb_err', np.float32),
+                          ('hahb_av', np.float32),
+                          ('o3_dust_correction', np.float32),
+                          ('ha_dust_correction', np.float32),
+                          ('hb_dust_correction', np.float32),
                           ('log_luminosity_o3', np.float32),
                           ('log_luminosity_o3_threshold', np.float32),
-                          ('log_luminosity_o3_limit', np.float32)])
+                          ('log_luminosity_o3_corr', np.float32),
+                          ('log_luminosity_o3_corr_threshold', np.float32),
+                          ('log_luminosity_ha', np.float32),
+                          ('log_luminosity_ha_threshold', np.float32),
+                          ('log_luminosity_ha_corr', np.float32),
+                          ('log_luminosity_ha_corr_threshold', np.float32),
+                          ('log_luminosity_hb', np.float32),
+                          ('log_luminosity_hb_threshold', np.float32),
+                          ('log_luminosity_hb_corr', np.float32),
+                          ('log_luminosity_hb_corr_threshold', np.float32)])
 
     agn = np.zeros(len(done), dtype=agn_dtype)
     agn['plateifu'] = done['plateifu']
@@ -233,15 +269,31 @@ if __name__ == '__main__':
     agn['n2ha'] = lines['n2ha']
     agn['s2ha'] = lines['s2ha']
     agn['o3hb'] = lines['o3hb']
+    agn['hahb'] = lines['hahb']
     agn['n2ha_err'] = lines['n2ha_err']
     agn['s2ha_err'] = lines['s2ha_err']
     agn['o3hb_err'] = lines['o3hb_err']
+    agn['hahb_err'] = lines['hahb_err']
+    agn['hahb_av'] = lines['hahb_av']
+    agn['o3_dust_correction'] = lines['o3_dust_correction']
+    agn['ha_dust_correction'] = lines['ha_dust_correction']
+    agn['hb_dust_correction'] = lines['hb_dust_correction']
     agn['log_luminosity_o3'] = - 9999.
-    agn['log_luminosity_o3_limit'] = - 9999.
     agn['log_luminosity_o3_threshold'] = - 9999.
     agn['log_luminosity_o3'][iagn] = log_agn_luminosity_o3
     agn['log_luminosity_o3_threshold'][ilimit] = log_agn_luminosity_o3_threshold[ilimit]
-    agn['log_luminosity_o3_limit'][ilimit] = log_agn_luminosity_o3_limit[ilimit]
+    agn['log_luminosity_o3_corr'] = - 9999.
+    agn['log_luminosity_o3_corr_threshold'] = - 9999.
+    agn['log_luminosity_o3_corr'][iagn] = log_agn_luminosity_o3_corr
+    agn['log_luminosity_o3_corr_threshold'][ilimit] = log_agn_luminosity_o3_corr_threshold[ilimit]
+    agn['log_luminosity_hb'] = - 9999.
+    agn['log_luminosity_hb_threshold'] = - 9999.
+    agn['log_luminosity_hb'][iagn] = log_agn_luminosity_hb
+    agn['log_luminosity_hb_threshold'][ilimit] = log_agn_luminosity_hb_threshold[ilimit]
+    agn['log_luminosity_hb_corr'] = - 9999.
+    agn['log_luminosity_hb_corr_threshold'] = - 9999.
+    agn['log_luminosity_hb_corr'][iagn] = log_agn_luminosity_hb_corr
+    agn['log_luminosity_hb_corr_threshold'][ilimit] = log_agn_luminosity_hb_corr_threshold[ilimit]
 
     agnfile = os.path.join(os.getenv('MNSA_DATA'),
                            version + '.analysis', 'agn',
