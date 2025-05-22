@@ -10,6 +10,7 @@ import fitsio
 import numpy as np
 import mnsa
 import magn
+import magn.defaults
 import magn.jiyan
 import mnsa.mnsautils
 
@@ -85,12 +86,16 @@ if __name__ == '__main__':
                         help='debug this plate ifu')
 
     parser.add_argument('-n', '--nsigma', dest='nsigma',
-                        type=np.float32, default=2., required=False)
+                        type=np.float32, default=magn.defaults.nsigma, required=False)
 
     parser.add_argument('-o', '--old', dest='dr17',
                         required=False, help='dr17',
                         action='store_true',
                         default=False)
+
+    parser.add_argument('-t', '--test', dest='test',
+                        type=str, default=None, required=False,
+                        help='test name')
 
     args = parser.parse_args()
     version = args.version
@@ -98,6 +103,7 @@ if __name__ == '__main__':
     dr17 = args.dr17
     plateifu = args.plateifu
     nsigma = args.nsigma
+    test = args.test
 
     done = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
                                     '{v}.analysis', 'mnsa-done-{v}.fits').format(v=version))
@@ -113,6 +119,7 @@ if __name__ == '__main__':
 
     # Find our AGN
     iagn = np.where(isagn)[0]
+    print(len(iagn))
 
     # Determine fluxes
     logterm = mnsa.mnsautils.log_flux_to_luminosity(redshift=drpall['z'][iagn])
@@ -185,9 +192,9 @@ if __name__ == '__main__':
         log_agn_luminosity_hb_threshold[i] = tmp_hb
         log_agn_luminosity_ha_threshold[i] = tmp_ha
         if(lines['o3_dust_correction'][i] == -9999.):
-            log_agn_luminosity_o3_corr_threshold[i] = tmp_o3 + agn_ratios['o3_dust_correction']
-            log_agn_luminosity_hb_corr_threshold[i] = tmp_hb + agn_ratios['hb_dust_correction']
-            log_agn_luminosity_ha_corr_threshold[i] = tmp_ha + agn_ratios['ha_dust_correction']
+            log_agn_luminosity_o3_corr_threshold[i] = tmp_o3 + np.log10(agn_ratios['o3_dust_correction'])
+            log_agn_luminosity_hb_corr_threshold[i] = tmp_hb + np.log10(agn_ratios['hb_dust_correction'])
+            log_agn_luminosity_ha_corr_threshold[i] = tmp_ha + np.log10(agn_ratios['ha_dust_correction'])
         else:
             log_agn_luminosity_o3_corr_threshold[i] = tmp_o3 + np.log10(lines['o3_dust_correction'][i])
             log_agn_luminosity_hb_corr_threshold[i] = tmp_hb + np.log10(lines['hb_dust_correction'][i])
@@ -300,6 +307,8 @@ if __name__ == '__main__':
                            'jiyan', 'jiyan-agn-{v}.fits')
     if(dr17):
         agnfile = agnfile.replace('agn-', 'agn-dr17-')
+    if(test is not None):
+        agnfile = agnfile.replace('agn-', 'agn-{t}-'.format(t=test))
     agnfile = agnfile.format(v=version)
     hdr = []
     hdr.append({'name':'MNSA_CAT',

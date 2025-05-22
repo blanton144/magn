@@ -1,0 +1,151 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import argparse
+import numpy as np
+import magn.schechter_likelihood
+import matplotlib.pyplot as plt
+import scipy.optimize
+import emcee
+import fitsio
+import scipy.integrate
+
+
+np.random.seed(102)
+
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(
+        prog=os.path.basename(sys.argv[0]),
+        description='Fit Schechter to full Jiyan sample')
+
+    parser.add_argument('-c', '--clobber', dest='clobber',
+                        action='store_true', default=False,
+                        help='Clobber emcee results')
+
+    parser.add_argument('-v', '--version', dest='version',
+                        type=str, default='0.3.2',
+                        help='MNSA configuration version')
+
+    parser.add_argument('-l', '--luminosity-version', dest='luminosity_version',
+                        type=str, default='hb_corr',
+                        help='version of luminosity to use')
+
+    parser.add_argument('-o', '--old', dest='dr17',
+                        required=False, help='dr17',
+                        action='store_true',
+                        default=False)
+
+    parser.add_argument('-w', '--weights', dest='use_weights',
+                        action='store_true', default=False,
+                        help='use ESR weights')
+
+    
+    args = parser.parse_args()
+    version = args.version
+    clobber = args.clobber
+    dr17 = args.dr17
+    use_weights = args.use_weights
+    luminosity_version = args.luminosity_version
+
+    summary = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
+                                       '{v}', 'mnsa-{v}.fits').format(v=version),
+                          ext='SUMMARY')
+
+    pipe3d = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
+                                      '{v}', 'mnsa-{v}.fits').format(v=version),
+                         ext='PIPE3D')
+
+    
+    agndir = os.path.join(os.getenv('MNSA_DATA'), version + '.analysis', 'agn', 'jiyan')
+    agnfile = os.path.join(agndir, 'jiyan-agn-{v}.fits')
+    if(dr17):
+        agnfile = agnfile.replace('agn-', 'agn-dr17-')
+    agnfile = agnfile.format(v=version)
+    agn = fitsio.read(agnfile)
+
+    good = (agn['good'] > 0)
+    isagn = (agn['isagn'] > 0)
+    mainbits = (2**10 | 2**11 | 2**12)
+    ismain = (((summary['mngtarg1'] & mainbits) != 0) &
+              (summary['esrweight'] > 0.))
+    offset = 42.5
+
+    log_lum_all = agn['log_luminosity_{v}'.format(v=luminosity_version)] - offset
+    log_lum_threshold_all = agn['log_luminosity_{v}_threshold'.format(v=luminosity_version)] - offset
+
+    if(use_weights):
+        esrweights_all = summary['esrweight']
+    else:
+        esrweights_all = np.ones(len(summary), dtype=np.float32)
+
+    iagn = np.where(good & isagn & ismain)[0]
+    ithreshold = np.where(good & (isagn == False) & ismain)[0]
+
+    nagn = len(iagn)
+    nthreshold = len(ithreshold)
+
+    log_lum = log_lum_all[iagn]
+    weights = esrweights_all[iagn]
+    log_lum_threshold = log_lum_threshold_all[ithreshold]
+    weights_threshold = esrweights_all[ithreshold]
+
+    properties = np.ones(nagn, dtype=np.float32)
+    properties_threshold = np.ones(nthreshold, dtype=np.float32)
+
+    alpha_0_range = np.array([0.4, 2.4])
+    log_lum_min_range = np.array([25.0, 37.5]) - offset
+    log_lum_star_range = np.array([37.5, 43.0]) - offset
+    log_lum_max = log_lum_star_range[1]
+    
+    # Make a grid of the neg log like
+    beta = 0.
+    log_lum_star = 42. - offset
+
+    ngrid = 40
+    alpha_grid = (alpha_0_range[0] +
+                  (alpha_0_range[1] - alpha_0_range[0]) * np.arange(ngrid) /
+                  np.float32(ngrid - 1))
+    dalpha = alpha_grid[1] - alpha_grid[0]
+    bottom = alpha_grid[0] - 0.5 * dalpha
+    top = alpha_grid[-1] + 0.5 * dalpha
+
+    llm_grid = (log_lum_min_range[0] +
+                (log_lum_min_range[1] - log_lum_min_range[0]) * np.arange(ngrid) /
+                np.float32(ngrid - 1))
+    dllm = llm_grid[1] - llm_grid[0]
+    left = llm_grid[0] - 0.5 * dllm
+    right = llm_grid[-1] + 0.5 * dllm
+    
+    # Create likelihood object
+    schlike = magn.schechter_likelihood.SchechterLikelihood(log_lambdas=log_lum,
+                                                            log_lambda_threshold=log_lum_threshold,
+                                                            properties=properties,
+                                                            properties_threshold=properties_threshold,
+                                                            weights=weights,
+                                                            weights_threshold=weights_threshold,
+                                                            alpha_0_range=alpha_0_range,
+                                                            log_lambda_star_range=log_lum_star_range,
+                                                            log_lambda_min_range=log_lum_min_range)
+    
+    nll = np.zeros((ngrid, ngrid), dtype=np.float32)
+    fabove = np.zeros((ngrid, ngrid), dtype=np.float32)
+    for i, alpha in enumerate(alpha_grid):
+        print(i)
+        for j, log_lum_min in enumerate(llm_grid):
+            theta = [alpha, log_lum_star, log_lum_min]
+            fabove[i, j] = magn.schechter_likelihood.Fabove(alpha=alpha,
+                                                            log_lambda_star=log_lum_star,
+                                                            log_lambda_min=log_lum_min,
+                                                            log_lambda_max=log_lum_max,
+                                                            log_lambda_c=40.0 - offset)
+            nll[i, j] = - schlike(theta)
+
+    filename = 'jiyan-schechter-lum-uniform-{l}-{v}.fits'.format(l=luminosity_version, v=version)
+    outfile = os.path.join(agndir, filename)
+    fitsio.write(outfile, alpha_grid, extname='ALPHA', clobber=True)
+    fitsio.write(outfile, llm_grid + offset, extname='LOGLUMMIN', clobber=False)
+    fitsio.write(outfile, nll, extname='NEGLOGLIKE', clobber=False)
+    fitsio.write(outfile, fabove, extname='FABOVE', clobber=False)

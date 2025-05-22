@@ -1,0 +1,86 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import argparse
+import numpy as np
+import magn.schechter_likelihood
+import matplotlib
+import matplotlib.pyplot as plt
+import scipy.optimize
+import emcee
+import fitsio
+import scipy.integrate
+
+
+np.random.seed(102)
+
+
+matplotlib.rcParams['figure.figsize'] = [8., 8]
+matplotlib.rcParams['font.size'] = 22
+matplotlib.rcParams['text.usetex'] = True
+
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(
+        prog=os.path.basename(sys.argv[0]),
+        description='Plot Schechter fit to full Jiyan sample')
+
+    parser.add_argument('-v', '--version', dest='version',
+                        type=str, default='0.3.2',
+                        help='MNSA configuration version')
+
+    parser.add_argument('-l', '--luminosity-version', dest='luminosity_version',
+                        type=str, default='hb_corr',
+                        help='version of luminosity to use')
+
+    parser.add_argument('-o', '--old', dest='dr17',
+                        required=False, help='dr17',
+                        action='store_true',
+                        default=False)
+
+    
+    args = parser.parse_args()
+    version = args.version
+    dr17 = args.dr17
+    luminosity_version = args.luminosity_version
+
+    agndir = os.path.join(os.getenv('MNSA_DATA'), version + '.analysis', 'agn', 'jiyan')
+
+    filename = 'jiyan-schechter-lum-uniform-{l}-{v}.fits'.format(l=luminosity_version, v=version)
+    infile = os.path.join(agndir, filename)
+
+    alpha_grid = fitsio.read(infile, ext='ALPHA')
+    llm_grid = fitsio.read(infile, ext='LOGLUMMIN')
+    nll = fitsio.read(infile, ext='NEGLOGLIKE')
+    fabove = fitsio.read(infile, ext='FABOVE')
+
+    dalpha = alpha_grid[1] - alpha_grid[0]
+    bottom = alpha_grid[0] - 0.5 * dalpha
+    top = alpha_grid[-1] + 0.5 * dalpha
+    dllm = llm_grid[1] - llm_grid[0]
+    left = llm_grid[0] - 0.5 * dllm
+    right = llm_grid[-1] + 0.5 * dllm
+
+    fig, ax = plt.subplots()
+
+    ii = np.where(np.abs(nll) < 1e+10)
+    nll_min = np.nanmin(nll[ii])
+    im = ax.imshow(nll - nll_min, vmin=0., vmax=100, extent=[left, right, bottom, top],
+                   cmap='Greys_r', origin='lower', aspect='auto')
+
+    cbarlabel = r'$\Delta \ln \mathcal{L}$'
+    cbar = ax.figure.colorbar(im, ax=ax)
+    cbar.ax.set_ylabel(cbarlabel, rotation=-90, va="bottom")
+    
+    CS = ax.contour(np.log10(fabove), extent=[left, right, bottom, top], origin='lower',
+                    levels=-4. + np.arange(30) * 0.3)
+    ax.clabel(CS, CS.levels, inline=True, fontsize=10)
+
+    plt.xlabel(r'${\rm log}_{10} \lambda_{\rm min}$')
+    plt.ylabel(r'$\alpha$')
+    filename = 'jiyan-schechter-lum-uniform-grid-{l}-{v}.png'.format(l=luminosity_version,
+                                                                     v=version)
+    plt.savefig(filename, dpi=300)
+    plt.close()
