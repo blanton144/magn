@@ -1,0 +1,123 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import subprocess
+import argparse
+import numpy as np
+import magn.schechter_likelihood
+import magn.defaults
+import matplotlib
+import matplotlib.pyplot as plt
+import scipy.optimize
+import emcee
+import fitsio
+import scipy.integrate
+
+
+matplotlib.rcParams['figure.figsize'] = [12., 8]
+matplotlib.rcParams['font.size'] = 20
+matplotlib.rcParams['text.usetex'] = True
+
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(
+        prog=os.path.basename(sys.argv[0]),
+        description='Plot emcee results')
+
+    parser.add_argument('-v', '--version', dest='version',
+                        type=str, default='0.3.2',
+                        help='MNSA configuration version')
+
+    parser.add_argument('-M', '--mbh-version', dest='mbh_version',
+                        type=str, default='kormendy13',
+                        help='version of black hole mass to use')
+
+    parser.add_argument('-b', '--bolo-version', dest='bolo_version',
+                        type=str, default='netzer19_dust_hb',
+                        help='version of bolometric luminosity to use')
+
+    parser.add_argument('-o', '--old', dest='dr17',
+                        required=False, help='dr17',
+                        action='store_true',
+                        default=False)
+
+    parser.add_argument('-t', '--test', dest='test',
+                        type=str, default=None, required=False,
+                        help='test name')
+
+    args = parser.parse_args()
+    version = args.version
+    dr17 = args.dr17
+    mbh_version = args.mbh_version
+    bolo_version = args.bolo_version
+    test = args.test
+
+    agndir = os.path.join(os.getenv('MNSA_DATA'), version + '.analysis', 'agn', 'jiyan')
+
+    filename = 'jiyan-schechter-emcee-edr-mssfr-{m}-{b}-fagn-{v}.fits'.format(m=mbh_version,
+                                                                              b=bolo_version,
+                                                                              v=version)
+    if(dr17):
+        filename = filename.replace('jiyan-', 'jiyan-dr17-')
+    if(test):
+        filename = filename.replace('jiyan-schechter', 'jiyan-{t}-schechter'.format(t=test))
+    infile = os.path.join(agndir, filename)
+
+    Fagn_lambda_cs = fitsio.read(infile, ext='FAGN_LAMBDA_CS')
+    mass_bin_centers = fitsio.read(infile, ext='MASS_BIN_CENTERS')
+    ssfr_bin_centers = fitsio.read(infile, ext='SSFR_BIN_CENTERS')
+    mass_bin_edges = fitsio.read(infile, ext='MASS_BIN_EDGES')
+    ssfr_bin_edges = fitsio.read(infile, ext='SSFR_BIN_EDGES')
+    log_Fagn_mean = fitsio.read(infile, ext='LOG_FAGN_MEAN')
+    log_Fagn_median = fitsio.read(infile, ext='LOG_FAGN_MEDIAN')
+    log_Fagn_std = fitsio.read(infile, ext='LOG_FAGN_STD')
+
+    ilambda = np.where(np.abs(Fagn_lambda_cs - magn.defaults.Fagn_logedr_threshold) < 0.01)[0][0]
+
+    print(ilambda)
+    log_Fagn_mean_3 = log_Fagn_mean[:, :, ilambda]
+    log_Fagn_std_3 = log_Fagn_std[:, :, ilambda]
+
+    fig, ax = plt.subplots()
+
+    colors = ['red', 'grey', 'blue']
+    for rissfr in np.arange(len(ssfr_bin_centers), dtype=np.int32):
+        issfr = len(ssfr_bin_centers) - 1 - rissfr
+        for imass in np.arange(len(mass_bin_centers), dtype=np.int32):
+            if(imass == 0):
+                if(issfr == 0):
+                    label = r'${\rm log}_{10}({\rm sSFR} / {\rm yr}^{-1}) < - 13$'
+                if(issfr == 1):
+                    label = r'$-13 < {\rm log}_{10}({\rm sSFR} / {\rm yr}^{-1}) < - 11$'
+                if(issfr == 2):
+                    label = r'${\rm log}_{10}({\rm sSFR} / {\rm yr}^{-1}) > -11$'
+            else:
+                label = None
+            ax.fill_between([mass_bin_edges[imass] + 0.02, mass_bin_edges[imass + 1] - 0.02],
+                            [log_Fagn_mean_3[imass, issfr] - log_Fagn_std_3[imass, issfr],
+                             log_Fagn_mean_3[imass, issfr] - log_Fagn_std_3[imass, issfr]],
+                            [log_Fagn_mean_3[imass, issfr] + log_Fagn_std_3[imass, issfr],
+                             log_Fagn_mean_3[imass, issfr] + log_Fagn_std_3[imass, issfr]],
+                            color=colors[issfr], alpha=0.6, label=label)
+
+    ax.set_ylim([-3.3, 0.15])
+    ax.set_xlabel(r'${\rm log}_{10} M_\ast {\rm (}M_\odot{\rm )}$')
+    ax.set_ylabel(r'${\rm log}_{10} F_{\rm AGN}(\lambda_{{\rm H}\beta, {\rm corr}} > 10^{' + str(int(magn.defaults.Fagn_logedr_threshold)) + r'})$')
+    ax.legend(loc='upper left')
+        
+    pngname = 'jiyan-schechter-emcee-edr-mssfr-{m}-{b}-Fagn-{v}.png'.format(m=mbh_version,
+                                                                            b=bolo_version,
+                                                                            v=version)
+    if(dr17):
+        pngname = pngname.replace('jiyan-', 'jiyan-dr17-')
+    if(test):
+        pngname = pngname.replace('jiyan-schechter', 'jiyan-{t}-schechter'.format(t=test))
+    plt.savefig(os.path.join(agndir, pngname), dpi=300)
+    plt.close()
+
+    subprocess.run(['convert',
+                    os.path.join(agndir, pngname),
+                    '-trim',
+                    os.path.join(agndir, pngname)])

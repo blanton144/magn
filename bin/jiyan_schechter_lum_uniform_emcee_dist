@@ -1,0 +1,152 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import argparse
+import numpy as np
+import magn.schechter_likelihood
+import matplotlib
+import matplotlib.pyplot as plt
+import scipy.optimize
+import emcee
+import fitsio
+import scipy.integrate
+import magn.defaults
+
+
+def cumul_D(model, actual):
+    m = model / model.max()
+    a = actual / actual.max()
+    maxD = np.abs(m - a).max()
+    return(maxD)
+
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(
+        prog=os.path.basename(sys.argv[0]),
+        description='Plot emcee results')
+
+    parser.add_argument('-v', '--version', dest='version',
+                        type=str, default='0.3.2',
+                        help='MNSA configuration version')
+
+    parser.add_argument('-l', '--luminosity-version', dest='luminosity_version',
+                        type=str, default=magn.defaults.luminosity_version,
+                        help='version of luminosity to use')
+
+    parser.add_argument('-o', '--old', dest='dr17',
+                        required=False, help='dr17',
+                        action='store_true',
+                        default=False)
+
+    parser.add_argument('-t', '--test', dest='test',
+                        type=str, default=None, required=False,
+                        help='test name')
+
+    args = parser.parse_args()
+    version = args.version
+    dr17 = args.dr17
+    test = args.test
+    luminosity_version = args.luminosity_version
+
+    agndir = os.path.join(os.getenv('MNSA_DATA'), version + '.analysis', 'agn', 'jiyan')
+   
+    filename = 'jiyan-schechter-emcee-lum-uniform-{l}-{v}.fits'.format(l=luminosity_version,
+                                                                       v=version)
+    if(dr17):
+        filename = filename.replace('jiyan-', 'jiyan-dr17-')
+    if(test):
+        filename = filename.replace('jiyan', 'jiyan-{t}-'.format(t=test))
+    infile = os.path.join(agndir, filename)
+    
+    offset = 42.5
+    chain = fitsio.read(infile, ext='CHAIN')
+    hdr = fitsio.read_header(infile, ext='CHAIN')
+    log_lum = fitsio.read(infile, ext='LOG_LUM')
+    log_lum_threshold = fitsio.read(infile, ext='LOG_LUM_THRESHOLD')
+    properties = fitsio.read(infile, ext='PROPERTIES')
+    properties_threshold = fitsio.read(infile, ext='PROPERTIES_THRESHOLD')
+    alpha_0_range = fitsio.read(infile, ext='ALPHA_0_RANGE')
+    log_lum_star_range = fitsio.read(infile, ext='LOG_LUM_STAR_RANGE')
+    log_lum_min_range = fitsio.read(infile, ext='LOG_LUM_MIN_RANGE')
+
+    nFagn = np.float32(hdr['NFAGN'])
+    Fagn_lum_c_min = np.float32(hdr['FAGN_LUM_C_MIN'])
+    Fagn_lum_c_max = np.float32(hdr['FAGN_LUM_C_MAX'])
+    Fagn_lum_cs = (Fagn_lum_c_min + (Fagn_lum_c_max - Fagn_lum_c_min) *
+                   np.arange(nFagn, dtype=np.float32) / np.float32(nFagn - 1))
+
+    ipick = np.argmax(chain['loglike'])
+    print(chain['loglike'].max())
+    theta = np.array([chain['alpha'][ipick],
+                      chain['log_lum_star'][ipick] - offset,
+                      chain['log_lum_min'][ipick] - offset])
+
+    nc = 1000
+    lumc = 30. + 15. * np.arange(nc, dtype=np.float32) / np.float32(nc - 1) - offset
+    Fagn = np.zeros(nc, dtype=np.float32)
+    for i in np.arange(nc, dtype=np.int32):
+        Fagn[i] = magn.schechter_likelihood.Fabove(alpha=theta[0], log_lambda_star=theta[1],
+                                                   log_lambda_min=theta[2], log_lambda_c=lumc[i])
+    dFagn = np.append(Fagn[:-1] - Fagn[1:], [0.])
+
+    dist = np.zeros(nc, dtype=np.float32)
+    for i, llt in enumerate(log_lum_threshold):
+        ibigger = np.where(lumc > llt)[0]
+        dist[ibigger] = dist[ibigger] + dFagn[ibigger]
+
+    factor = (len(log_lum) + len(log_lum_threshold)) / len(log_lum_threshold)
+    dist = dist * factor
+
+    log_lum_dist, log_lum_edges = np.histogram(log_lum, range=log_lum_star_range, bins=20)
+
+    log_lum_dist_model = np.zeros(len(log_lum_dist), dtype=np.float32)
+    for i in np.arange(len(log_lum_dist)):
+        ibin = np.where((lumc > log_lum_edges[i]) & (lumc < log_lum_edges[i + 1]))[0]
+        log_lum_dist_model[i] = dist[ibin].sum()
+
+    log_lum_dist_model_cumul = dist.cumsum()
+    log_lum_dist_model_cumul = log_lum_dist_model_cumul / log_lum_dist_model_cumul.max()
+    
+    log_lum_dist_cumul = np.zeros(len(log_lum_dist_model_cumul), dtype=np.float32)
+    for i in np.arange(len(log_lum_dist_cumul)):
+        ilt = np.where(log_lum < lumc[i])[0]
+        log_lum_dist_cumul[i] = len(ilt)
+    log_lum_dist_cumul = log_lum_dist_cumul / log_lum_dist_cumul.max()
+
+    lumc_interp = scipy.interpolate.interp1d(log_lum_dist_model_cumul, lumc)
+
+    ks_D = cumul_D(log_lum_dist_model_cumul, log_lum_dist_cumul)
+    nran = 1000
+    ks_D_ran = np.zeros(nran, dtype=np.float32)
+    print(ks_D)
+    for iran in np.arange(nran, dtype=np.int32):
+        c = np.random.random(size=len(log_lum))
+        log_lum_ran = lumc_interp(c)
+        log_lum_dist_cumul_ran = np.zeros(len(log_lum_dist_model_cumul), dtype=np.float32)
+        for i in np.arange(len(log_lum_dist_cumul)):
+            ilt = np.where(log_lum_ran < lumc[i])[0]
+            log_lum_dist_cumul_ran[i] = len(ilt)
+        ks_D_ran[iran] = cumul_D(log_lum_dist_model_cumul, log_lum_dist_cumul_ran)
+
+    pks = np.float32(len(np.where(ks_D_ran > ks_D)[0])) / np.float32(nran)
+
+    filename = 'jiyan-schechter-emcee-lum-uniform-dist-{l}-{v}.fits'.format(l=luminosity_version,
+                                                                            v=version)
+    if(dr17):
+        filename = filename.replace('jiyan-', 'jiyan-dr17-')
+    if(test):
+        filename = filename.replace('jiyan', 'jiyan-{t}-'.format(t=test))
+    outfile = os.path.join(agndir, filename)
+
+    hdr = []
+    hdr.append({'name':'PROBKS',
+                'value': pks,
+                'comment': 'K-S probability of observations under model'})
+                        
+    fitsio.write(outfile, log_lum_edges + offset, header=hdr, clobber=True)
+    fitsio.write(outfile, log_lum_dist, clobber=False)
+    fitsio.write(outfile, log_lum_dist_model, clobber=False)
+    fitsio.write(outfile, log_lum_dist_cumul, clobber=False)
+    fitsio.write(outfile, log_lum_dist_model_cumul, clobber=False)

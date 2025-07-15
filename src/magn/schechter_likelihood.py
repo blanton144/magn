@@ -53,7 +53,7 @@ def schechter_sample(size=None, alpha=None, log_x_min=None, log_x_max=None):
 class SchechterLikelihood(object):
     def __init__(self, log_lambdas=None, log_lambda_threshold=None, properties=None,
                  properties_threshold=None, model_type=None, alpha_0_range=[-2., 2.5],
-                 log_lambda_min_range=[-10., -3.5], log_lambda_star_range=[-4., 2.],
+                 log_lambda_min_range=[-10., -7.8], log_lambda_star_range=[-4., 2.],
                  weights=None, weights_threshold=None):
         self.log_lambdas = log_lambdas
         self.log_lambda_threshold = log_lambda_threshold
@@ -231,7 +231,7 @@ class SchechterLikelihood(object):
         
         inds_alp_lt_1 = np.where(alphas < 1)
         inds_alp_gt_1 = np.where(alphas >= 1)
-        
+
         norms = np.ones(len(alphas))
 
         norms[inds_alp_gt_1] = 1. / (self.total_integral(log_lambda_min, 2.2,
@@ -285,15 +285,21 @@ class SchechterLikelihood(object):
 
         izero = np.where(likelihoods_alps_lt_1 <= 0.)[0]
         if(len(izero) > 0):
-            print("here")
-            print(log_lambda_min)
-            print(self.log_lambda_threshold[inds_alps_lt_1][izero])
+            izero = np.where(likelihoods_alps_lt_1 <= 0.)[0]
+            print("{n} likelihoods exactly zero".format(n=len(izero)), flush=True)
+            print(likelihoods_alps_lt_1[izero], flush=True)
+            print(log_lambda_min, flush=True)
+            print(alpha_0, flush=True)
+            print(lambda_star, flush=True)
+            print(self.log_lambda_threshold[inds_alps_lt_1][izero], flush=True)
+            likelihoods_alps_lt_1[izero] = 1.e-30
 
         ln_likelihood = (ln_likelihood +
                          (self.weights_threshold[inds_alps_gt_1] * np.log(likelihoods_alps_gt_1)).sum() +
                          (self.weights_threshold[inds_alps_lt_1] * np.log(likelihoods_alps_lt_1)).sum())
 
         if(np.isnan(ln_likelihood) == True):
+            print("NaN!!!")
             print(alpha_0)
             print(beta)
             print(log_lambda_min)
@@ -309,6 +315,30 @@ class SchechterLikelihood(object):
             if(len(likelihoods_alps_lt_1) > 0):
                 print(likelihoods_alps_lt_1.min())
                 print(likelihoods_alps_lt_1.max())
+            print("Uh ooh", flush=True)
+
+        if(np.isfinite(ln_likelihood) == False):
+            print("Infinite!!", flush=True)
+            ii = np.where(log_likelihoods <= 0)[0]
+            print(self.log_lambdas[ii])
+            print(self.log_lambdas)
+            print(alpha_0)
+            print(alphas)
+            print(beta)
+            print(log_lambda_min)
+            print(log_lambda_star)
+            print(ln_likelihood)
+            print(log_likelihoods.sum())
+            print(log_likelihoods)
+            print(norms.min())
+            print(norms.max())
+            if(len(likelihoods_alps_gt_1) > 0):
+                print(likelihoods_alps_gt_1.min())
+                print(likelihoods_alps_gt_1.max())
+            if(len(likelihoods_alps_lt_1) > 0):
+                print(likelihoods_alps_lt_1.min())
+                print(likelihoods_alps_lt_1.max())
+            print("Uh ooh", flush=True)
 
         return(ln_likelihood)
 
@@ -336,7 +366,7 @@ def schechter_emcee(name='lambda', log_lambdas=None, log_lambda_threshold=None,
     ndim = 3
     log_lambda_star_st = - 0.5 + np.random.normal() * 0.2
     alpha_st = 1.5 + np.random.normal() * 0.2
-    log_lambda_min_st = log_lambda_min_range[1] - 2. + np.random.normal() * 0.2
+    log_lambda_min_st = log_lambda_min_range[1] - 3. + np.random.normal() * 0.2
     theta_st = np.array([alpha_st, log_lambda_star_st, log_lambda_min_st])
     theta_0 = (np.outer(np.ones(nwalkers), theta_st) +
                np.random.normal(size=(nwalkers, ndim)) * 0.2)

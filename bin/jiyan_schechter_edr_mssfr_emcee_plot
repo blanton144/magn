@@ -1,0 +1,235 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import subprocess
+import argparse
+import numpy as np
+import magn.schechter_likelihood
+import magn.defaults
+import matplotlib
+import matplotlib.pyplot as plt
+import scipy.optimize
+import emcee
+import fitsio
+import scipy.integrate
+
+
+matplotlib.rcParams['figure.figsize'] = [10., 8]
+matplotlib.rcParams['font.size'] = 20
+matplotlib.rcParams['text.usetex'] = True
+
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(
+        prog=os.path.basename(sys.argv[0]),
+        description='Plot emcee results')
+
+    parser.add_argument('-v', '--version', dest='version',
+                        type=str, default='0.3.2',
+                        help='MNSA configuration version')
+
+    parser.add_argument('-M', '--mbh-version', dest='mbh_version',
+                        type=str, default=magn.defaults.mbh_version,
+                        help='version of black hole mass to use')
+
+    parser.add_argument('-b', '--bolo-version', dest='bolo_version',
+                        type=str, default=magn.defaults.bolo_version,
+                        help='version of bolometric luminosity to use')
+
+    parser.add_argument('-o', '--old', dest='dr17',
+                        required=False, help='dr17',
+                        action='store_true',
+                        default=False)
+
+    parser.add_argument('-m', '--mass-bins', dest='mass_binlist',
+                        type=str, default=magn.defaults.mass_bin_edges,
+                        help='mass bin edges')
+
+    parser.add_argument('-s', '--ssfr-bins', dest='ssfr_binlist',
+                        type=str, default=magn.defaults.ssfr_bin_edges,
+                        help='ssfr bin edges')
+
+    parser.add_argument('-t', '--test', dest='test',
+                        type=str, default=None, required=False,
+                        help='test name')
+
+    args = parser.parse_args()
+    version = args.version
+    dr17 = args.dr17
+    mbh_version = args.mbh_version
+    bolo_version = args.bolo_version
+    mass_binlist = args.mass_binlist
+    ssfr_binlist = args.ssfr_binlist
+    test = args.test
+
+    ssfr_bin_edges = np.array(ssfr_binlist.split(','), dtype=np.float32)
+    ssfr_nbins = len(ssfr_bin_edges) - 1
+    ssfr_bin_centers = 0.5 * (ssfr_bin_edges[:-1] + ssfr_bin_edges[1:])
+
+    mass_bin_edges = np.array(mass_binlist.split(','), dtype=np.float32)
+    mass_nbins = len(mass_bin_edges) - 1
+    mass_bin_centers = 0.5 * (mass_bin_edges[:-1] + mass_bin_edges[1:])
+
+    agndir = os.path.join(os.getenv('MNSA_DATA'), version + '.analysis', 'agn', 'jiyan')
+
+    for mass_ibin in np.arange(mass_nbins, dtype=np.int32):
+        for ssfr_ibin in np.arange(ssfr_nbins, dtype=np.int32):
+            print("Mass bin {j} SSFR bin {i}".format(j=mass_ibin, i=ssfr_ibin))
+   
+            filename = 'jiyan-schechter-emcee-edr-mssfr-{m}-{b}-{mi}-{si}-{v}.fits'.format(m=mbh_version,
+                                                                                           b=bolo_version,
+                                                                                           v=version,
+                                                                                           mi=mass_ibin,
+                                                                                           si=ssfr_ibin)
+            if(dr17):
+                filename = filename.replace('jiyan-', 'jiyan-dr17-')
+            if(test):
+                filename = filename.replace('jiyan', 'jiyan-{t}'.format(t=test))
+
+            infile = os.path.join(agndir, filename)
+
+            if(os.path.exists(infile) is False):
+                print(" ... file does not exist")
+                continue
+    
+            chain = fitsio.read(infile)
+            hdr = fitsio.read_header(infile, ext=1)
+
+            nFagn = np.float32(hdr['NFAGN'])
+            Fagn_lambda_c_min = np.float32(hdr['FAGN_LAMBDA_C_MIN'])
+            Fagn_lambda_c_max = np.float32(hdr['FAGN_LAMBDA_C_MAX'])
+            Fagn_lambda_cs = (Fagn_lambda_c_min + (Fagn_lambda_c_max - Fagn_lambda_c_min) *
+                           np.arange(nFagn, dtype=np.float32) / np.float32(nFagn - 1))
+
+            ilambda = np.where(np.abs(Fagn_lambda_cs - (magn.defaults.Fagn_logedr_threshold)) < 0.01)[0][0]
+
+            fig, axs = plt.subplots(4, 4,
+                                    gridspec_kw={'hspace':0,
+                                                 'wspace':0})
+            
+            pts = np.zeros((len(chain), 4), dtype=np.float32)
+            pts[:, 0] = chain['alpha']
+            pts[:, 1] = chain['log_lambda_min']
+            pts[:, 2] = chain['log_lambda_star']
+            pts[:, 3] = np.log10(chain['Fagn'][:, ilambda])
+            
+            labels = [r'$\alpha$',
+                      r'${\rm log}_{10} L_{\rm min}$',
+                      r'${\rm log}_{10} L_{\ast}$',
+                      r'$F_{\rm AGN, ' + str(int(magn.defaults.Fagn_logedr_threshold)) + r'}$']
+            
+            limits = np.array([[0.51, 2.39],
+                               [-15., -6.5],
+                               [-1.7, 0.5],
+                               [-3.6, -0.4]])
+            
+            ngrid = 30
+
+            for i in np.arange(4):
+                for j in np.arange(4):
+                    ip = 3 - i
+                    jp = j
+                    hrange = limits[[jp, ip], :]
+                    if(jp < ip):
+                        greyscale_linear, xe, ye = np.histogram2d(pts[:, jp], pts[:, ip],
+                                                                  bins=ngrid,
+                                                                  range=hrange)
+                        greyscale_asinh = np.arcsinh(greyscale_linear)
+                        im = axs[i, j].imshow(greyscale_asinh.T, cmap='Greys', origin='lower',
+                                              aspect='auto', extent=hrange.flatten())
+                        if(i == 0):
+                            axs[i, j].set_xlabel(labels[jp])
+                            axs[i, j].xaxis.set_label_position('top') 
+                            axs[i, j].tick_params(top=True, labeltop=True, bottom=False, labelbottom=False)
+                        else:
+                            axs[i, j].tick_params(top=False, labeltop=False, bottom=False, labelbottom=False)
+                        if(j == 0):
+                            axs[i, j].set_ylabel(labels[ip])
+                        else:
+                            axs[i, j].tick_params(left=False, labelleft=False, right=False, labelright=False)
+                    elif(jp > ip):
+                        axs[i, j].axis('off')
+                    else:
+                        dist, xe = np.histogram(pts[:, ip], bins=ngrid, range=hrange[0, :])
+                        xm = 0.5 * (xe[:-1] + xe[1:])
+                        axs[i, j].plot(hrange[0, :], [0., 0.], linewidth=2, color='grey')
+                        axs[i, j].step(xm, dist, where='mid', color='black')
+                        axs[i, j].tick_params(left=False, labelleft=False, right=False, labelright=False)
+                        axs[i, j].set_xlabel(labels[jp])
+                        axs[i, j].xaxis.set_label_position('bottom') 
+                    
+            pngname = 'jiyan-schechter-emcee-edr-mssfr-{m}-{b}-{mi}-{si}-{v}.png'.format(m=mbh_version,
+                                                                                          b=bolo_version,
+                                                                                          v=version,
+                                                                                          mi=mass_ibin,
+                                                                                          si=ssfr_ibin)
+            if(dr17):
+                pngname = pngname.replace('jiyan-', 'jiyan-dr17-')
+            if(test):
+                pngname = pngname.replace('jiyan', 'jiyan-{t}'.format(t=test))
+            plt.savefig(os.path.join(agndir, pngname), dpi=300)
+            plt.close()
+
+            indx = np.arange(len(chain), dtype=np.int32)
+            np.random.shuffle(indx)
+            indx = indx[0:100]
+
+            fig, ax = plt.subplots()
+            
+            log_Fagn_mean = np.nanmean(np.log10(chain['Fagn']), axis=0)
+            log_Fagn_std = np.nanstd(np.log10(chain['Fagn']), axis=0)
+            
+            for i in indx:
+                ax.fill_between(Fagn_lambda_cs, log_Fagn_mean - log_Fagn_std,
+                                log_Fagn_mean + log_Fagn_std, color='pink')
+                ax.plot(Fagn_lambda_cs, np.log10(chain['Fagn'][i, :]),
+                        linewidth=2, alpha=0.05, color='black')
+                ax.plot(Fagn_lambda_cs, log_Fagn_mean, linewidth=4, color='red')
+
+            ax.set_ylim([-5.1, 0.1])
+            ax.set_xlabel(r'${\rm log}_{10} \lambda_{\rm c}$')
+            ax.set_ylabel(r'${\rm log}_{10} F_{\rm AGN}(\lambda > \lambda_{\rm c})$')
+    
+            pngname = 'jiyan-schechter-emcee-edr-mssfr-Fagn-{m}-{b}-{mi}-{si}-{v}.png'.format(m=mbh_version,
+                                                                                              b=bolo_version,
+                                                                                              v=version,
+                                                                                              si=ssfr_ibin,
+                                                                                              mi=mass_ibin)
+            if(dr17):
+                pngname = pngname.replace('jiyan-', 'jiyan-dr17-')
+            if(test):
+                pngname = pngname.replace('jiyan', 'jiyan-{t}'.format(t=test))
+            plt.savefig(os.path.join(agndir, pngname), dpi=300)
+            plt.close()
+
+    cmds = ['montage', '-tile', '5x3', '-geometry', '4000x2400']
+    cmds_Fagn = cmds.copy()
+    prefix = 'jiyan-schechter'
+    if(dr17):
+        prefix = prefix.replace('jiyan-', 'jiyan-dr17-')
+    if(test):
+        prefix = prefix.replace('jiyan', 'jiyan-{t}'.format(t=test))
+    for ssfr_ibin in np.arange(ssfr_nbins, dtype=np.int32):
+        for mass_ibin in np.arange(mass_nbins, dtype=np.int32):
+            r_ssfr_ibin = ssfr_nbins - 1 - ssfr_ibin
+            cmds.append(prefix + '-emcee-edr-mssfr-{m}-{b}-{mi}-{si}-{v}.png'.format(m=mbh_version,
+                                                                                     b=bolo_version,
+                                                                                     v=version,
+                                                                                     mi=mass_ibin,
+                                                                                     si=r_ssfr_ibin))
+            cmds_Fagn.append(prefix + '-emcee-edr-mssfr-Fagn-{m}-{b}-{mi}-{si}-{v}.png'.format(m=mbh_version,
+                                                                                               b=bolo_version,
+                                                                                               v=version,
+                                                                                               mi=mass_ibin,
+                                                                                               si=r_ssfr_ibin))
+
+    cmds.append(prefix + '-emcee-edr-mssfr-{m}-{b}-all-{v}.png'.format(m=mbh_version,
+                                                                       b=bolo_version,
+                                                                       v=version))
+    cmds_Fagn.append(prefix + '-emcee-edr-mssfr-Fagn-{m}-{b}-all-{v}.png'.format(m=mbh_version,
+                                                                                 b=bolo_version,
+                                                                                 v=version))
+    subprocess.run(cmds)
+    subprocess.run(cmds_Fagn)

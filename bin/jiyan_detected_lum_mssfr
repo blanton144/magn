@@ -1,0 +1,158 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import argparse
+import numpy as np
+import magn.schechter_likelihood
+import magn.defaults
+import matplotlib.pyplot as plt
+import scipy.optimize
+import fitsio
+import scipy.integrate
+
+
+np.random.seed(102)
+
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(
+        prog=os.path.basename(sys.argv[0]),
+        description='Fit Schechter to full Jiyan sample')
+
+    parser.add_argument('-w', '--weights', dest='use_weights',
+                        action='store_true', default=False,
+                        help='use ESR weights')
+
+    parser.add_argument('-c', '--clobber', dest='clobber',
+                        action='store_true', default=False,
+                        help='clobber individual FITS files')
+
+    parser.add_argument('-v', '--version', dest='version',
+                        type=str, default='0.3.2',
+                        help='MNSA configuration version')
+
+    parser.add_argument('-l', '--luminosity-version', dest='luminosity_version',
+                        type=str, default=magn.defaults.luminosity_version,
+                        help='version of luminosity to use')
+
+    parser.add_argument('-o', '--old', dest='dr17',
+                        required=False, help='dr17',
+                        action='store_true',
+                        default=False)
+
+    parser.add_argument('-m', '--mass-bins', dest='mass_binlist',
+                        type=str, default=magn.defaults.mass_bin_edges,
+                        help='mass bin edges')
+
+    parser.add_argument('-s', '--ssfr-bins', dest='ssfr_binlist',
+                        type=str, default=magn.defaults.ssfr_bin_edges,
+                        help='ssfr bin edges')
+
+    parser.add_argument('-t', '--test', dest='test',
+                        type=str, default=None, required=False,
+                        help='test name')
+    
+    args = parser.parse_args()
+    version = args.version
+    dr17 = args.dr17
+    use_weights = args.use_weights
+    clobber = args.clobber
+    test = args.test
+    luminosity_version = args.luminosity_version
+    mass_binlist = args.mass_binlist
+    ssfr_binlist = args.ssfr_binlist
+
+    ssfr_bin_edges = np.array(ssfr_binlist.split(','), dtype=np.float32)
+    ssfr_nbins = len(ssfr_bin_edges) - 1
+    ssfr_bin_centers = 0.5 * (ssfr_bin_edges[:-1] + ssfr_bin_edges[1:])
+
+    mass_bin_edges = np.array(mass_binlist.split(','), dtype=np.float32)
+    mass_nbins = len(mass_bin_edges) - 1
+    mass_bin_centers = 0.5 * (mass_bin_edges[:-1] + mass_bin_edges[1:])
+
+    summary = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
+                                       '{v}', 'mnsa-{v}.fits').format(v=version),
+                          ext='SUMMARY')
+
+    pipe3d = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
+                                      '{v}', 'mnsa-{v}.fits').format(v=version),
+                         ext='PIPE3D')
+    log_ssfr = pipe3d['log_SFR_D_C'] - pipe3d['log_Mass']
+    log_mass = pipe3d['log_Mass']
+
+    agndir = os.path.join(os.getenv('MNSA_DATA'), version + '.analysis', 'agn', 'jiyan')
+    agnfile = os.path.join(agndir, 'jiyan-agn-{v}.fits')
+    if(dr17):
+        agnfile = agnfile.replace('agn-', 'agn-dr17-')
+    if(test):
+        agnfile = agnfile.replace('agn-', 'agn-{t}-'.format(t=test))
+    agnfile = agnfile.format(v=version)
+    agn = fitsio.read(agnfile)
+
+    good = (agn['good'] > 0)
+    isagn = (agn['isagn'] > 0)
+    mainbits = (2**10 | 2**11 | 2**12)
+    ismain = (((summary['mngtarg1'] & mainbits) != 0) &
+              (summary['esrweight'] > 0.))
+
+    log_lum_all = agn['log_luminosity_{v}'.format(v=luminosity_version)]
+    log_lum_threshold_all = agn['log_luminosity_{v}_threshold'.format(v=luminosity_version)]
+
+    if(use_weights):
+        esrweights_all = summary['esrweight']
+    else:
+        esrweights_all = np.ones(len(summary), dtype=np.float32)
+
+    Fagn_lum_c_range = [38., 42.]
+    nFagn = 21
+
+    Fagn_lum_cs = (Fagn_lum_c_range[0] + (Fagn_lum_c_range[1] - Fagn_lum_c_range[0]) *
+                   np.arange(nFagn, dtype=np.float32) / np.float32(nFagn - 1))
+
+    log_Fagn = np.zeros((mass_nbins, ssfr_nbins, nFagn), dtype=np.float32)
+    log_Fagn_std = np.zeros((mass_nbins, ssfr_nbins, nFagn), dtype=np.float32)
+
+    for mass_ibin in np.arange(mass_nbins, dtype=np.int32):
+        for ssfr_ibin in np.arange(ssfr_nbins, dtype=np.int32):
+            print("Mass bin {j} SSFR bin {i}".format(j=mass_ibin, i=ssfr_ibin))
+
+            inbin = ((log_ssfr > ssfr_bin_edges[ssfr_ibin]) &
+                     (log_ssfr <= ssfr_bin_edges[ssfr_ibin + 1]) &
+                     (log_mass > mass_bin_edges[mass_ibin]) &
+                     (log_mass <= mass_bin_edges[mass_ibin + 1]))
+
+            agn = (good & isagn & ismain & inbin)
+            threshold = (good & (isagn == False) & ismain & inbin)
+
+            for ilum_c, lum_c in enumerate(Fagn_lum_cs):
+                above = (log_lum_all > lum_c)
+
+                detected = (agn & above)
+                notdetected = (threshold) | (agn & (above == False))
+            
+                weights_detected = esrweights_all[detected]
+                weights_notdetected = esrweights_all[notdetected]
+
+                total = (weights_notdetected.sum() + weights_detected.sum())
+                Fagn = (weights_detected.sum()) / total
+                Fagn_std = np.sqrt(weights_detected.sum()) / total
+                
+                log_Fagn[mass_ibin, ssfr_ibin, ilum_c] = np.log10(Fagn)
+                log_Fagn_std[mass_ibin, ssfr_ibin, ilum_c] = Fagn_std / Fagn / np.log(10.)
+
+    filename = 'jiyan-detected-lum-mssfr-{l}-fagn-{v}.fits'.format(l=luminosity_version,
+                                                                   v=version)
+    if(test):
+        filename = filename.replace('jiyan', 'jiyan-{t}'.format(t=test))
+    outfile = os.path.join(agndir, filename)
+            
+    fitsio.write(outfile, Fagn_lum_cs, extname='FAGN_LUM_CS', clobber=True)
+    fitsio.write(outfile, mass_bin_centers, extname='MASS_BIN_CENTERS', clobber=False)
+    fitsio.write(outfile, ssfr_bin_centers, extname='SSFR_BIN_CENTERS', clobber=False)
+    fitsio.write(outfile, mass_bin_edges, extname='MASS_BIN_EDGES', clobber=False)
+    fitsio.write(outfile, ssfr_bin_edges, extname='SSFR_BIN_EDGES', clobber=False)
+    fitsio.write(outfile, log_Fagn, extname='LOG_FAGN', clobber=False)
+    fitsio.write(outfile, log_Fagn_std, extname='LOG_FAGN_STD', clobber=False)
+    

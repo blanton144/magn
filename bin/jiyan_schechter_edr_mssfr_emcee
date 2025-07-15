@@ -1,0 +1,279 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import argparse
+import numpy as np
+import magn.defaults
+import magn.schechter_likelihood
+import matplotlib.pyplot as plt
+import scipy.optimize
+import fitsio
+import scipy.integrate
+
+
+np.random.seed(102)
+
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(
+        prog=os.path.basename(sys.argv[0]),
+        description='Fit Schechter to full Jiyan sample')
+
+    parser.add_argument('-w', '--weights', dest='use_weights',
+                        action='store_true', default=False,
+                        help='use ESR weights')
+
+    parser.add_argument('-c', '--clobber', dest='clobber',
+                        action='store_true', default=False,
+                        help='clobber individual FITS files')
+
+    parser.add_argument('-v', '--version', dest='version',
+                        type=str, default='0.3.2',
+                        help='MNSA configuration version')
+
+    parser.add_argument('-M', '--mbh-version', dest='mbh_version',
+                        type=str, default=magn.defaults.mbh_version,
+                        help='version of black hole mass to use')
+
+    parser.add_argument('-b', '--bolo-version', dest='bolo_version',
+                        type=str, default=magn.defaults.bolo_version,
+                        help='version of bolometric luminosity to use')
+
+    parser.add_argument('-o', '--old', dest='dr17',
+                        required=False, help='dr17',
+                        action='store_true',
+                        default=False)
+
+    parser.add_argument('-m', '--mass-bins', dest='mass_binlist',
+                        type=str, default=magn.defaults.mass_bin_edges,
+                        help='mass bin edges')
+
+    parser.add_argument('-s', '--ssfr-bins', dest='ssfr_binlist',
+                        type=str, default=magn.defaults.ssfr_bin_edges,
+                        help='ssfr bin edges')
+
+    parser.add_argument('-t', '--test', dest='test',
+                        type=str, default=None, required=False,
+                        help='test name')
+
+    args = parser.parse_args()
+    version = args.version
+    dr17 = args.dr17
+    use_weights = args.use_weights
+    clobber = args.clobber
+    test = args.test
+    mbh_version = args.mbh_version
+    bolo_version = args.bolo_version
+    mass_binlist = args.mass_binlist
+    ssfr_binlist = args.ssfr_binlist
+
+    ssfr_bin_edges = np.array(ssfr_binlist.split(','), dtype=np.float32)
+    ssfr_nbins = len(ssfr_bin_edges) - 1
+    ssfr_bin_centers = 0.5 * (ssfr_bin_edges[:-1] + ssfr_bin_edges[1:])
+
+    mass_bin_edges = np.array(mass_binlist.split(','), dtype=np.float32)
+    mass_nbins = len(mass_bin_edges) - 1
+    mass_bin_centers = 0.5 * (mass_bin_edges[:-1] + mass_bin_edges[1:])
+
+    summary = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
+                                       '{v}', 'mnsa-{v}.fits').format(v=version),
+                          ext='SUMMARY')
+
+    pipe3d = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
+                                      '{v}', 'mnsa-{v}.fits').format(v=version),
+                         ext='PIPE3D')
+    log_ssfr = pipe3d['log_SFR_D_C'] - pipe3d['log_Mass']
+    log_mass = pipe3d['log_Mass']
+
+    agndir = os.path.join(os.getenv('MNSA_DATA'), version + '.analysis', 'agn', 'jiyan')
+    agnfile = os.path.join(agndir, 'jiyan-agn-{v}.fits')
+    if(dr17):
+        agnfile = agnfile.replace('agn-', 'agn-dr17-')
+    if(test):
+        agnfile = agnfile.replace('agn-', 'agn-{t}-'.format(t=test))
+    agnfile = agnfile.format(v=version)
+    agn = fitsio.read(agnfile)
+
+    paramsfile = os.path.join(os.getenv('MNSA_DATA'),
+                           version + '.analysis', 'agn',
+                           'jiyan', 'jiyan-agn-params-{v}.fits')
+    if(dr17):
+        paramsfile = paramsfile.replace('agn-', 'agn-dr17-')
+    if(test):
+        paramsfile = paramsfile.replace('agn-', 'agn-{t}-'.format(t=test))
+    paramsfile = paramsfile.format(v=version)
+    params = fitsio.read(paramsfile, ext='PARAMS')
+    mbhvs = fitsio.read(paramsfile, ext='MBH_VERSIONS')
+    bolovs = fitsio.read(paramsfile, ext='BOLO_VERSIONS')
+
+    good = ((agn['good'] > 0) & (params['vdisp'] > magn.defaults.vdisp_low))
+    isagn = (agn['isagn'] > 0)
+    mainbits = (2**10 | 2**11 | 2**12)
+    ismain = (((summary['mngtarg1'] & mainbits) != 0) &
+              (summary['esrweight'] > 0.))
+
+    imbh = np.where(mbhvs['mbh_version'] == mbh_version)[0][0]
+    ibolo = np.where(bolovs['bolo_version'] == bolo_version)[0][0]
+
+    if(use_weights):
+        esrweights_all = summary['esrweight']
+    else:
+        esrweights_all = np.ones(len(summary), dtype=np.float32)
+
+    log_mbh_all = params['logmbh'][:, imbh]
+    log_ledd_all = params['logledd'][:, imbh]
+    log_bolo_all = params['logbolo'][:, ibolo]
+    log_bolo_threshold_all = params['logbolo_threshold'][:, ibolo]
+    log_lambdas_all = log_bolo_all - log_ledd_all
+    log_lambdas_threshold_all = log_bolo_threshold_all - log_ledd_all
+
+    # Prior range definition
+    alpha_0_range = np.array([-1.9, 2.4])
+    log_lambda_min_range = np.array([-15.0, -7.8])
+    log_lambda_star_range = np.array([-2., 1.0])
+    log_lambda_max = log_lambda_star_range[1]
+
+    Fagn_lambda_c_range = [-4., 0.]
+    nFagn = 21
+
+    for mass_ibin in np.arange(mass_nbins, dtype=np.int32):
+        for ssfr_ibin in np.arange(ssfr_nbins, dtype=np.int32):
+            print("Mass bin {j} SSFR bin {i}".format(j=mass_ibin, i=ssfr_ibin))
+
+            filename = 'jiyan-schechter-emcee-edr-mssfr-{m}-{b}-{mi}-{si}-{v}.fits'.format(m=mbh_version,
+                                                                                           b=bolo_version,
+                                                                                           v=version,
+                                                                                           mi=mass_ibin,
+                                                                                           si=ssfr_ibin)
+            if(dr17):
+                filename = filename.replace('jiyan-', 'jiyan-dr17-')
+            if(test):
+                filename = filename.replace('jiyan', 'jiyan-{t}'.format(t=test))
+            outfile = os.path.join(agndir, filename)
+
+            if(os.path.exists(outfile) & (clobber == False)):
+                print(" ... FITS file exists, skipping emcee")
+                continue
+                
+            inbin = ((log_ssfr > ssfr_bin_edges[ssfr_ibin]) &
+                     (log_ssfr <= ssfr_bin_edges[ssfr_ibin + 1]) &
+                     (log_mass > mass_bin_edges[mass_ibin]) &
+                     (log_mass <= mass_bin_edges[mass_ibin + 1]))
+
+            iagn = np.where(good & isagn & ismain & inbin)[0]
+            ithreshold = np.where(good & (isagn == False) & ismain & inbin)[0]
+            
+            nagn = len(iagn)
+            nthreshold = len(ithreshold)
+            
+            log_lambdas = log_lambdas_all[iagn]
+            weights = esrweights_all[iagn]
+            log_lambdas_threshold = log_lambdas_threshold_all[ithreshold]
+            weights_threshold = esrweights_all[ithreshold]
+            
+            properties = np.ones(nagn, dtype=np.float32)
+            properties_threshold = np.ones(nthreshold, dtype=np.float32)
+
+            print(log_lambda_min_range)
+            chain = magn.schechter_likelihood.schechter_emcee(name='lambda', 
+                                                              log_lambdas=log_lambdas,
+                                                              log_lambda_threshold=log_lambdas_threshold,
+                                                              properties=properties,
+                                                              properties_threshold=properties_threshold,
+                                                              weights=weights,
+                                                              weights_threshold=weights_threshold,
+                                                              alpha_0_range=alpha_0_range,
+                                                              log_lambda_star_range=log_lambda_star_range,
+                                                              log_lambda_min_range=log_lambda_min_range,
+                                                              Fagn_lambda_c_range=Fagn_lambda_c_range,
+                                                              nFagn=nFagn)
+    
+
+            hdr = []
+            hdr.append({'name': 'NFAGN',
+                        'value': nFagn,
+                        'comment': 'size of Fagn array'})
+            hdr.append({'name': 'FAGN_LAMBDA_C_MIN',
+                        'value': Fagn_lambda_c_range[0],
+                        'comment': 'minimum lambda threshold'})
+            hdr.append({'name': 'FAGN_LAMBDA_C_MAX',
+                        'value': Fagn_lambda_c_range[1],
+                        'comment': 'maximum lambda threshold'})
+            hdr.append({'name': 'LOG_SSFR_MIN',
+                        'value': ssfr_bin_edges[ssfr_ibin],
+                        'comment': 'minimum sSFR of bin'})
+            hdr.append({'name': 'LOG_SSFR_MAX',
+                        'value': ssfr_bin_edges[ssfr_ibin + 1],
+                        'comment': 'maximum sSFR of bin'})
+            hdr.append({'name': 'LOG_MASS_MIN',
+                        'value': mass_bin_edges[mass_ibin],
+                        'comment': 'minimum mass of bin'})
+            hdr.append({'name': 'LOG_MASS_MAX',
+                        'value': mass_bin_edges[mass_ibin + 1],
+                        'comment': 'maximum mass of bin'})
+            fitsio.write(outfile, chain, header=hdr, extname='CHAIN', clobber=True)
+            if(len(log_lambdas) > 0):
+                fitsio.write(outfile, log_lambdas, extname='LOG_LAMBDA', clobber=False)
+            else:
+                fitsio.write(outfile, np.array([0.0], dtype=np.float32), extname='LOG_LAMBDA', clobber=False)
+            fitsio.write(outfile, log_lambdas_threshold, extname='LOG_LAMBDA_THRESHOLD', clobber=False)
+            if(len(properties) > 0):
+                fitsio.write(outfile, properties, extname='PROPERTIES', clobber=False)
+            else:
+                fitsio.write(outfile, np.array([0.0], dtype=np.float32), extname='PROPERTIES', clobber=False)
+            fitsio.write(outfile, properties_threshold, extname='PROPERTIES_THRESHOLD', clobber=False)
+            if(len(weights) > 0):
+                fitsio.write(outfile, weights, extname='WEIGHTS', clobber=False)
+            else:
+                fitsio.write(outfile, np.array([0.0], dtype=np.float32), extname='WEIGHTS', clobber=False)
+            fitsio.write(outfile, weights_threshold, extname='WEIGHTS_THRESHOLD', clobber=False)
+            fitsio.write(outfile, alpha_0_range, extname='ALPHA_0_RANGE', clobber=False)
+            fitsio.write(outfile, log_lambda_star_range, extname='LOG_LAMBDA_STAR_RANGE', clobber=False)
+            fitsio.write(outfile, log_lambda_min_range, extname='LOG_LAMBDA_MIN_RANGE', clobber=False)
+
+
+    log_Fagn_mean = np.zeros((mass_nbins, ssfr_nbins, nFagn), dtype=np.float32)
+    log_Fagn_median = np.zeros((mass_nbins, ssfr_nbins, nFagn), dtype=np.float32)
+    log_Fagn_std = np.zeros((mass_nbins, ssfr_nbins, nFagn), dtype=np.float32)
+    for mass_ibin in np.arange(mass_nbins, dtype=np.int32):
+        for ssfr_ibin in np.arange(ssfr_nbins, dtype=np.int32):
+            filename = 'jiyan-schechter-emcee-edr-mssfr-{m}-{b}-{mi}-{si}-{v}.fits'.format(m=mbh_version,
+                                                                                           b=bolo_version,
+                                                                                           v=version,
+                                                                                           mi=mass_ibin,
+            si=ssfr_ibin)
+            if(dr17):
+                filename = filename.replace('jiyan-', 'jiyan-dr17-')
+            if(test):
+                filename = filename.replace('jiyan', 'jiyan-{t}'.format(t=test))
+            infile = os.path.join(agndir, filename)
+
+            print(infile)
+            chain = fitsio.read(infile, ext='CHAIN')
+            log_Fagn_mean[mass_ibin, ssfr_ibin, :] = np.nanmean(np.log10(chain['Fagn']), axis=0)
+            log_Fagn_std[mass_ibin, ssfr_ibin, :] = np.nanstd(np.log10(chain['Fagn']), axis=0)
+            log_Fagn_median[mass_ibin, ssfr_ibin, :] = np.nanmedian(np.log10(chain['Fagn']), axis=0)
+
+    Fagn_lambda_cs = (Fagn_lambda_c_range[0] + (Fagn_lambda_c_range[1] - Fagn_lambda_c_range[0]) *
+                      np.arange(nFagn, dtype=np.float32) / np.float32(nFagn - 1))
+
+    filename = 'jiyan-schechter-emcee-edr-mssfr-{m}-{b}-Fagn-{v}.fits'.format(m=mbh_version,
+                                                                              b=bolo_version,
+                                                                              v=version)
+    if(dr17):
+        filename = filename.replace('jiyan-', 'jiyan-dr17-')
+    if(test):
+        filename = filename.replace('jiyan', 'jiyan-{t}'.format(t=test))
+    outfile = os.path.join(agndir, filename)
+            
+    fitsio.write(outfile, Fagn_lambda_cs, extname='FAGN_LAMBDA_CS', clobber=True)
+    fitsio.write(outfile, mass_bin_centers, extname='MASS_BIN_CENTERS', clobber=False)
+    fitsio.write(outfile, ssfr_bin_centers, extname='SSFR_BIN_CENTERS', clobber=False)
+    fitsio.write(outfile, mass_bin_edges, extname='MASS_BIN_EDGES', clobber=False)
+    fitsio.write(outfile, ssfr_bin_edges, extname='SSFR_BIN_EDGES', clobber=False)
+    fitsio.write(outfile, log_Fagn_mean, extname='LOG_FAGN_MEAN', clobber=False)
+    fitsio.write(outfile, log_Fagn_std, extname='LOG_FAGN_STD', clobber=False)
+    fitsio.write(outfile, log_Fagn_median, extname='LOG_FAGN_MEDIAN', clobber=False)
+    

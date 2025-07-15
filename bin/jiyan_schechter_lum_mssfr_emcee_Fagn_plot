@@ -1,0 +1,112 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import subprocess
+import argparse
+import numpy as np
+import magn.schechter_likelihood
+import magn.defaults
+import matplotlib
+import matplotlib.pyplot as plt
+import scipy.optimize
+import emcee
+import fitsio
+import scipy.integrate
+
+
+matplotlib.rcParams['figure.figsize'] = [12., 8]
+matplotlib.rcParams['font.size'] = 20
+matplotlib.rcParams['text.usetex'] = True
+
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(
+        prog=os.path.basename(sys.argv[0]),
+        description='Plot emcee results')
+
+    parser.add_argument('-v', '--version', dest='version',
+                        type=str, default='0.3.2',
+                        help='MNSA configuration version')
+
+    parser.add_argument('-l', '--luminosity-version', dest='luminosity_version',
+                        type=str, default=magn.defaults.luminosity_version,
+                        help='version of luminosity to use')
+
+    parser.add_argument('-o', '--old', dest='dr17',
+                        required=False, help='dr17',
+                        action='store_true',
+                        default=False)
+
+    parser.add_argument('-t', '--test', dest='test',
+                        type=str, default=None, required=False,
+                        help='test name')
+
+    args = parser.parse_args()
+    version = args.version
+    dr17 = args.dr17
+    luminosity_version = args.luminosity_version
+    test = args.test
+
+    agndir = os.path.join(os.getenv('MNSA_DATA'), version + '.analysis', 'agn', 'jiyan')
+
+    filename = 'jiyan-schechter-emcee-lum-mssfr-{l}-Fagn-{v}.fits'.format(l=luminosity_version,
+                                                                          v=version)
+    if(test):
+        filename = filename.replace('jiyan-schechter', 'jiyan-{t}-schechter'.format(t=test))
+    infile = os.path.join(agndir, filename)
+
+    Fagn_lum_cs = fitsio.read(infile, ext='FAGN_LUM_CS')
+    mass_bin_centers = fitsio.read(infile, ext='MASS_BIN_CENTERS')
+    ssfr_bin_centers = fitsio.read(infile, ext='SSFR_BIN_CENTERS')
+    mass_bin_edges = fitsio.read(infile, ext='MASS_BIN_EDGES')
+    ssfr_bin_edges = fitsio.read(infile, ext='SSFR_BIN_EDGES')
+    log_Fagn_mean = fitsio.read(infile, ext='LOG_FAGN_MEAN')
+    log_Fagn_median = fitsio.read(infile, ext='LOG_FAGN_MEDIAN')
+    log_Fagn_std = fitsio.read(infile, ext='LOG_FAGN_STD')
+
+    ilum = np.where(np.abs(Fagn_lum_cs - magn.defaults.Fagn_loglum_threshold) < 0.01)[0][0]
+
+    print(ilum)
+    log_Fagn_mean_39 = log_Fagn_mean[:, :, ilum]
+    log_Fagn_std_39 = log_Fagn_std[:, :, ilum]
+
+    fig, ax = plt.subplots()
+
+    colors = ['red', 'grey', 'blue']
+    for rissfr in np.arange(len(ssfr_bin_centers), dtype=np.int32):
+        issfr = len(ssfr_bin_centers) - 1 - rissfr
+        for imass in np.arange(len(mass_bin_centers), dtype=np.int32):
+            if(imass == 0):
+                if(issfr == 0):
+                    label = r'${\rm log}_{10}({\rm sSFR} / {\rm yr}^{-1}) < - 13$'
+                if(issfr == 1):
+                    label = r'$-13 < {\rm log}_{10}({\rm sSFR} / {\rm yr}^{-1}) < - 11$'
+                if(issfr == 2):
+                    label = r'${\rm log}_{10}({\rm sSFR} / {\rm yr}^{-1}) > -11$'
+            else:
+                label = None
+            ax.fill_between([mass_bin_edges[imass] + 0.02, mass_bin_edges[imass + 1] - 0.02],
+                            [log_Fagn_mean_39[imass, issfr] - log_Fagn_std_39[imass, issfr],
+                             log_Fagn_mean_39[imass, issfr] - log_Fagn_std_39[imass, issfr]],
+                            [log_Fagn_mean_39[imass, issfr] + log_Fagn_std_39[imass, issfr],
+                             log_Fagn_mean_39[imass, issfr] + log_Fagn_std_39[imass, issfr]],
+                            color=colors[issfr], alpha=0.6, label=label)
+
+    ax.set_ylim([-3.3, 0.15])
+    ax.set_xlabel(r'${\rm log}_{10} M_\ast {\rm (}M_\odot{\rm )}$')
+    ax.set_ylabel(r'${\rm log}_{10} F_{\rm AGN}(L_{{\rm H}\beta, {\rm corr}} > 10^{' + str(int(magn.defaults.Fagn_loglum_threshold)) + r'}~{\rm erg}~{\rm s}^{-1})$')
+    ax.legend(loc='upper left')
+        
+    pngname = 'jiyan-schechter-emcee-lum-mssfr-{l}-Fagn-{v}.png'.format(l=luminosity_version,
+                                                                        v=version)
+    if(test):
+        pngname = pngname.replace('jiyan-schechter', 'jiyan-{t}-schechter'.format(t=test))
+    plt.savefig(os.path.join(agndir, pngname), dpi=300)
+    plt.close()
+
+    subprocess.run(['convert',
+                    os.path.join(agndir, pngname),
+                    '-trim',
+                    os.path.join(agndir, pngname)])
