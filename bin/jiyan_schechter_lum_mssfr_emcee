@@ -42,6 +42,10 @@ if __name__ == '__main__':
                         action='store_true',
                         default=False)
 
+    parser.add_argument('-A', '--alt-name', dest='altname',
+                        type=str, default='',
+                        help='alternative dir postfix')
+
     parser.add_argument('-m', '--mass-bins', dest='mass_binlist',
                         type=str, default=magn.defaults.mass_bin_edges,
                         help='mass bin edges')
@@ -63,6 +67,7 @@ if __name__ == '__main__':
     luminosity_version = args.luminosity_version
     mass_binlist = args.mass_binlist
     ssfr_binlist = args.ssfr_binlist
+    altname = args.altname
 
     ssfr_bin_edges = np.array(ssfr_binlist.split(','), dtype=np.float32)
     ssfr_nbins = len(ssfr_bin_edges) - 1
@@ -82,7 +87,7 @@ if __name__ == '__main__':
     log_ssfr = pipe3d['log_SFR_D_C'] - pipe3d['log_Mass']
     log_mass = pipe3d['log_Mass']
 
-    agndir = os.path.join(os.getenv('MNSA_DATA'), version + '.analysis', 'agn', 'jiyan')
+    agndir = os.path.join(os.getenv('MNSA_DATA'), version + '.analysis', 'agn', 'jiyan' + altname)
     agnfile = os.path.join(agndir, 'jiyan-agn-{v}.fits')
     if(dr17):
         agnfile = agnfile.replace('agn-', 'agn-dr17-')
@@ -108,8 +113,8 @@ if __name__ == '__main__':
 
     # Prior range definition
     alpha_0_range = np.array([-1.9, 2.4])
-    log_lum_min_range = np.array([30.0, 37.5]) - offset
-    log_lum_star_range = np.array([37.5, 43.0]) - offset
+    log_lum_min_range = np.array([30.0, 37.4]) - offset
+    log_lum_star_range = np.array([37.4, 43.0]) - offset
     log_lum_max = log_lum_star_range[1]
 
     Fagn_lum_c_range = [38., 42.]

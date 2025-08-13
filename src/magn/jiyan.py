@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import scipy.interpolate
 import fitsio
 import magn.balmer
+import magn.defaults
 import mnsa.mnsautils
 
 
@@ -140,7 +141,9 @@ def ratios_to_pspace(n2ha=None, s2ha=None, o3hb=None,
     return(p1, p2, p3, p1_err, p2_err, p3_err)
 
 
-def would_be_agn(cf=None, cf_ivar=None, agn_ratios=None, log_flux_o3=None, nsigma=2.):
+def would_be_agn(cf=None, cf_ivar=None, agn_ratios=None, log_flux_o3=None, nsigma=2.,
+                 p1_threshold=magn.defaults.p1_threshold,
+                 p3_threshold=magn.defaults.p3_threshold):
     """Return whether a given luminosity will pass the threshold to be classified as AGN
 
     Parameters
@@ -160,6 +163,12 @@ def would_be_agn(cf=None, cf_ivar=None, agn_ratios=None, log_flux_o3=None, nsigm
 
     nsigma : np.float32
         number of sigma to consider detected
+
+    p1_threshold : np.float32
+        lower threshold of P1 to be an AGN
+
+    p3_threshold : np.float32
+        lower threshold of P3 to be an AGN
     
     Returns
     -------
@@ -188,7 +197,8 @@ def would_be_agn(cf=None, cf_ivar=None, agn_ratios=None, log_flux_o3=None, nsigm
         ncf[channel] = cf[channel] + (10.**log_flux_o3) * agn_ratios[channel]
     detected, isagn, lines = select_agn(cf=ncf, cf_ivar=cf_ivar,
                                         good=np.ones(1, dtype=bool),
-                                        nsigma=nsigma)
+                                        nsigma=nsigma, p1_threshold=p1_threshold,
+                                        p3_threshold=p3_threshold)
     return(detected, isagn, lines)
 
 
@@ -236,8 +246,9 @@ def proc_channel(channel=None, cf=None, cf_ivar=None, good=None, nsigma=None):
     return(flux, err, detected, err_good)
 
 
-def select_agn(cf=None, cf_ivar=None, good=None, p1_threshold=-0.3, p3_threshold=0.55,
-               nsigma=2.):
+def select_agn(cf=None, cf_ivar=None, good=None,
+               p1_threshold=magn.defaults.p1_threshold,
+               p3_threshold=magn.defaults.p3_threshold, nsigma=2.):
     """Select AGN using P1 and P3
 
     Parameters
@@ -434,7 +445,8 @@ def select_agn(cf=None, cf_ivar=None, good=None, p1_threshold=-0.3, p3_threshold
 
 
 def find_o3_threshold(redshift=None, cf=None, cf_ivar=None, agn_ratios=None,
-                      nsigma=None):
+                      nsigma=None, p1_threshold=magn.defaults.p1_threshold,
+                      p3_threshold=magn.defaults.p3_threshold):
     """Find [OIII] luminosity threshold
 
     Parameters
@@ -454,6 +466,12 @@ def find_o3_threshold(redshift=None, cf=None, cf_ivar=None, agn_ratios=None,
 
     nsigma : np.float32
         number of sigma to consider detected
+
+    p1_threshold : np.float32
+        P1 threshold
+
+    p3_threshold : np.float32
+        P3 threshold
 
     Returns
     -------
@@ -479,19 +497,22 @@ def find_o3_threshold(redshift=None, cf=None, cf_ivar=None, agn_ratios=None,
     bounds = np.array([15., 50.], dtype=np.float32) - logterm
     log_flux_o3 = bounds[0]
     detected, isagn0, lines = would_be_agn(cf=cf, cf_ivar=cf_ivar, agn_ratios=agn_ratios,
-                                           log_flux_o3=log_flux_o3, nsigma=nsigma)
+                                           log_flux_o3=log_flux_o3, nsigma=nsigma,
+                                           p1_threshold=p1_threshold, p3_threshold=p3_threshold)
     if(isagn0 == True):
         return(- 9999.)
     log_flux_o3 = bounds[1]
     detected, isagn1, lines = would_be_agn(cf=cf, cf_ivar=cf_ivar, agn_ratios=agn_ratios,
-                                           log_flux_o3=log_flux_o3, nsigma=nsigma)
+                                           log_flux_o3=log_flux_o3, nsigma=nsigma,
+                                           p1_threshold=p1_threshold, p3_threshold=p3_threshold)
     if(isagn1 == False):
         return(- 9999.)
     while((bounds[1] - bounds[0]) > 1.e-4):
         bounds_middle = 0.5 * (bounds[1] + bounds[0])
         log_flux_o3 = bounds_middle
         detected, isagn, lines = would_be_agn(cf=cf, cf_ivar=cf_ivar, agn_ratios=agn_ratios,
-                                              log_flux_o3=log_flux_o3, nsigma=nsigma)
+                                              log_flux_o3=log_flux_o3, nsigma=nsigma,
+                                              p1_threshold=p1_threshold, p3_threshold=p3_threshold)
         if(isagn):
             bounds[1] = bounds_middle
         else:

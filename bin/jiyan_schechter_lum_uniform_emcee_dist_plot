@@ -57,7 +57,7 @@ if __name__ == '__main__':
     if(dr17):
         filename = filename.replace('jiyan-', 'jiyan-dr17-')
     if(test):
-        filename = filename.replace('jiyan', 'jiyan-{t}-'.format(t=test))
+        filename = filename.replace('jiyan-', 'jiyan-{t}-'.format(t=test))
     infile = os.path.join(agndir, filename)
 
     hdr = fitsio.read_header(infile)
@@ -88,7 +88,7 @@ if __name__ == '__main__':
     if(dr17):
         pngname = pngname.replace('jiyan-', 'jiyan-dr17-')
     if(test):
-        pngname = pngname.replace('jiyan', 'jiyan-{t}-'.format(t=test))
+        pngname = pngname.replace('jiyan-', 'jiyan-{t}-'.format(t=test))
     plt.savefig(os.path.join(agndir, pngname), dpi=300)
     plt.close()
 

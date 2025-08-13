@@ -15,11 +15,6 @@ import magn.jiyan
 import mnsa.mnsautils
 
 
-# TODO:
-# - add balmer decrement
-# - add various Lbol choices
-
-
 def plot_o3_threshold(redshift=None, cf=None, cf_ivar=None, agn_ratios=None):
     """Plot path in P1-P3 space
 
@@ -54,7 +49,7 @@ def plot_o3_threshold(redshift=None, cf=None, cf_ivar=None, agn_ratios=None):
     test_p2 = np.zeros(len(o3s), dtype=np.float32)
     test_p3 = np.zeros(len(o3s), dtype=np.float32)
     for i, o3 in enumerate(o3s):
-        tmp_detected, tmp_isagn, tmp_p1, tmp_p2, tmp_p3 = magn.jiyan.would_be_agn(redshift=redshift, cf=cf, cf_ivar=cf_ivar, agn_ratios=agn_ratios, log_luminosity_o3=o3)
+        tmp_detected, tmp_isagn, tmp_p1, tmp_p2, tmp_p3 = magn.jiyan.would_be_agn(redshift=redshift, cf=cf, cf_ivar=cf_ivar, agn_ratios=agn_ratios, nsigma=nsigma, log_luminosity_o3=o3, p1_threshold=p1_threshold, p3_threshold=p3_threshold)
         test_detected[i] = tmp_detected
         test_isagn[i] = tmp_isagn
         test_p1[i] = tmp_p1
@@ -88,6 +83,12 @@ if __name__ == '__main__':
     parser.add_argument('-n', '--nsigma', dest='nsigma',
                         type=np.float32, default=magn.defaults.nsigma, required=False)
 
+    parser.add_argument('-1', '--p1-threshold', dest='p1_threshold',
+                        type=np.float32, default=magn.defaults.p1_threshold, required=False)
+
+    parser.add_argument('-3', '--p3-threshold', dest='p3_threshold',
+                        type=np.float32, default=magn.defaults.p3_threshold, required=False)
+
     parser.add_argument('-o', '--old', dest='dr17',
                         required=False, help='dr17',
                         action='store_true',
@@ -97,12 +98,19 @@ if __name__ == '__main__':
                         type=str, default=None, required=False,
                         help='test name')
 
+    parser.add_argument('-A', '--alt-name', dest='altname',
+                        type=str, default='',
+                        help='alternative dir postfix')
+
     args = parser.parse_args()
     version = args.version
     debug = args.debug
     dr17 = args.dr17
     plateifu = args.plateifu
     nsigma = args.nsigma
+    p1_threshold = args.p1_threshold
+    p3_threshold = args.p3_threshold
+    altname = args.altname
     test = args.test
 
     done = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
@@ -115,11 +123,19 @@ if __name__ == '__main__':
                                                               dr17=dr17)
 
     detected, isagn, lines = magn.jiyan.select_agn(cf=cf, cf_ivar=cf_ivar, good=good,
-                                                   nsigma=nsigma)
+                                                   nsigma=nsigma, p1_threshold=p1_threshold,
+                                                   p3_threshold=p3_threshold)
+
+    default_detected, default_isagn, default_lines = magn.jiyan.select_agn(cf=cf,
+                                                                           cf_ivar=cf_ivar,
+                                                                           good=good,
+                                                                           nsigma=magn.defaults.nsigma,
+                                                                           p1_threshold=magn.defaults.p1_threshold,
+                                                                           p3_threshold=magn.defaults.p3_threshold)
 
     # Find our AGN
     iagn = np.where(isagn)[0]
-    print(len(iagn))
+    default_iagn = np.where(default_isagn)[0]
 
     # Determine fluxes
     logterm = mnsa.mnsautils.log_flux_to_luminosity(redshift=drpall['z'][iagn])
@@ -132,12 +148,13 @@ if __name__ == '__main__':
     log_agn_flux_hb_corr = np.log10(lines['hb_corr'][iagn])
     log_agn_luminosity_hb_corr = log_agn_flux_hb_corr + logterm
 
-    # Find typical line ratios relative to OIII
-    n2o3 = cf['NII-6585'][iagn] / cf['OIII-5008'][iagn]
-    s2ao3 = cf['SII-6718'][iagn] / cf['OIII-5008'][iagn]
-    s2bo3 = cf['SII-6732'][iagn] / cf['OIII-5008'][iagn]
-    hao3 = cf['Ha-6564'][iagn] / cf['OIII-5008'][iagn]
-    hbo3 = cf['Hb-4862'][iagn] / cf['OIII-5008'][iagn]
+    # Find typical line ratios relative to OIII---use default AGN
+    # definition for consistency across analyses!
+    n2o3 = cf['NII-6585'][default_iagn] / cf['OIII-5008'][default_iagn]
+    s2ao3 = cf['SII-6718'][default_iagn] / cf['OIII-5008'][default_iagn]
+    s2bo3 = cf['SII-6732'][default_iagn] / cf['OIII-5008'][default_iagn]
+    hao3 = cf['Ha-6564'][default_iagn] / cf['OIII-5008'][default_iagn]
+    hbo3 = cf['Hb-4862'][default_iagn] / cf['OIII-5008'][default_iagn]
 
     agn_ratios = dict()
     agn_ratios['OIII-5008'] = 1.
@@ -151,9 +168,9 @@ if __name__ == '__main__':
     agn_ratios['s2ha'] = np.log10(agn_ratios['SII-6718+6732'] / agn_ratios['Ha-6564'])
     agn_ratios['o3hb'] = np.log10(agn_ratios['OIII-5008'] / agn_ratios['Hb-4862'])
     agn_ratios['o3ha'] = np.log10(agn_ratios['OIII-5008'] / agn_ratios['Ha-6564'])
-    agn_ratios['o3_dust_correction'] = np.median(lines['o3_dust_correction'][iagn])
-    agn_ratios['ha_dust_correction'] = np.median(lines['ha_dust_correction'][iagn])
-    agn_ratios['hb_dust_correction'] = np.median(lines['hb_dust_correction'][iagn])
+    agn_ratios['o3_dust_correction'] = np.median(default_lines['o3_dust_correction'][default_iagn])
+    agn_ratios['ha_dust_correction'] = np.median(default_lines['ha_dust_correction'][default_iagn])
+    agn_ratios['hb_dust_correction'] = np.median(default_lines['hb_dust_correction'][default_iagn])
 
     agn_p1, agn_p2, agn_p3 = magn.jiyan.ratios_to_pspace(n2ha=agn_ratios['n2ha'],
                                                          s2ha=agn_ratios['s2ha'],
@@ -187,7 +204,9 @@ if __name__ == '__main__':
                                                               cf=ccf,
                                                               cf_ivar=ccf_ivar,
                                                               agn_ratios=agn_ratios,
-                                                              nsigma=nsigma)
+                                                              nsigma=nsigma,
+                                                              p1_threshold=p1_threshold,
+                                                              p3_threshold=p3_threshold)
         log_agn_luminosity_o3_threshold[i] = tmp_o3
         log_agn_luminosity_hb_threshold[i] = tmp_hb
         log_agn_luminosity_ha_threshold[i] = tmp_ha
@@ -304,7 +323,7 @@ if __name__ == '__main__':
 
     agnfile = os.path.join(os.getenv('MNSA_DATA'),
                            version + '.analysis', 'agn',
-                           'jiyan', 'jiyan-agn-{v}.fits')
+                           'jiyan' + altname, 'jiyan-agn-{v}.fits')
     if(dr17):
         agnfile = agnfile.replace('agn-', 'agn-dr17-')
     if(test is not None):
@@ -314,6 +333,15 @@ if __name__ == '__main__':
     hdr.append({'name':'MNSA_CAT',
                 'value':version,
                 'comment':'mnsa catalog version'})
+    hdr.append({'name':'P1_THRESHOLD',
+                'value':p1_threshold,
+                'comment':'P1 threshold used'})
+    hdr.append({'name':'P3_THRESHOLD',
+                'value':p3_threshold,
+                'comment':'P3 threshold used'})
+    hdr.append({'name':'NSIGMA_THRESHOLD',
+                'value':nsigma,
+                'comment':'nsigma threshold used'})
     for k in agn_ratios:
         hdr.append({'name':k,
                     'value':agn_ratios[k],

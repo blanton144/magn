@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import scipy.optimize
 import fitsio
 import scipy.integrate
+import scipy.stats
 
 
 np.random.seed(102)
@@ -54,6 +55,10 @@ if __name__ == '__main__':
                         type=str, default=magn.defaults.ssfr_bin_edges,
                         help='ssfr bin edges')
 
+    parser.add_argument('-A', '--alt-name', dest='altname',
+                        type=str, default='',
+                        help='alternative dir postfix')
+
     parser.add_argument('-t', '--test', dest='test',
                         type=str, default=None, required=False,
                         help='test name')
@@ -64,6 +69,7 @@ if __name__ == '__main__':
     use_weights = args.use_weights
     clobber = args.clobber
     test = args.test
+    altname = args.altname
     mbh_version = args.mbh_version
     bolo_version = args.bolo_version
     mass_binlist = args.mass_binlist
@@ -87,7 +93,7 @@ if __name__ == '__main__':
     log_ssfr = pipe3d['log_SFR_D_C'] - pipe3d['log_Mass']
     log_mass = pipe3d['log_Mass']
 
-    agndir = os.path.join(os.getenv('MNSA_DATA'), version + '.analysis', 'agn', 'jiyan')
+    agndir = os.path.join(os.getenv('MNSA_DATA'), version + '.analysis', 'agn', 'jiyan' + altname)
     agnfile = os.path.join(agndir, 'jiyan-agn-{v}.fits')
     if(dr17):
         agnfile = agnfile.replace('agn-', 'agn-dr17-')
@@ -98,7 +104,7 @@ if __name__ == '__main__':
 
     paramsfile = os.path.join(os.getenv('MNSA_DATA'),
                            version + '.analysis', 'agn',
-                           'jiyan', 'jiyan-agn-params-{v}.fits')
+                           'jiyan' + altname, 'jiyan-agn-params-{v}.fits')
     if(dr17):
         paramsfile = paramsfile.replace('agn-', 'agn-dr17-')
     if(test):
@@ -137,6 +143,8 @@ if __name__ == '__main__':
 
     log_Fagn = np.zeros((mass_nbins, ssfr_nbins, nFagn), dtype=np.float32)
     log_Fagn_std = np.zeros((mass_nbins, ssfr_nbins, nFagn), dtype=np.float32)
+    log_Fagn_low = np.zeros((mass_nbins, ssfr_nbins, nFagn), dtype=np.float32)
+    log_Fagn_high = np.zeros((mass_nbins, ssfr_nbins, nFagn), dtype=np.float32)
 
     for mass_ibin in np.arange(mass_nbins, dtype=np.int32):
         for ssfr_ibin in np.arange(ssfr_nbins, dtype=np.int32):
@@ -163,8 +171,23 @@ if __name__ == '__main__':
                 Fagn = (weights_detected.sum()) / total
                 Fagn_std = np.sqrt(weights_detected.sum()) / total
                 
-                log_Fagn[mass_ibin, ssfr_ibin, ilambda_c] = np.log10(Fagn)
-                log_Fagn_std[mass_ibin, ssfr_ibin, ilambda_c] = Fagn_std / Fagn / np.log(10.)
+                if(Fagn <= 0.):
+                    log_Fagn[mass_ibin, ssfr_ibin, ilambda_c] = - 99.
+                    log_Fagn_std[mass_ibin, ssfr_ibin, ilambda_c] = - 99.
+                else:
+                    log_Fagn[mass_ibin, ssfr_ibin, ilambda_c] = np.log10(Fagn)
+                    log_Fagn_std[mass_ibin, ssfr_ibin, ilambda_c] = Fagn_std / Fagn / np.log(10.)
+
+                btest = scipy.stats.binomtest(detected.sum(),
+                                              notdetected.sum() + detected.sum())
+                ci = btest.proportion_ci(confidence_level=0.68)
+                low = ci.low
+                high = ci.high
+                if(low <= 0.):
+                    log_Fagn_low[mass_ibin, ssfr_ibin, ilambda_c] = - 99.0
+                else:
+                    log_Fagn_low[mass_ibin, ssfr_ibin, ilambda_c] = np.log10(low)
+                log_Fagn_high[mass_ibin, ssfr_ibin, ilambda_c] = np.log10(high)
 
     filename = 'jiyan-detected-edr-mssfr-{m}-{b}-fagn-{v}.fits'.format(m=mbh_version,
                                                                        b=bolo_version,
@@ -180,4 +203,6 @@ if __name__ == '__main__':
     fitsio.write(outfile, ssfr_bin_edges, extname='SSFR_BIN_EDGES', clobber=False)
     fitsio.write(outfile, log_Fagn, extname='LOG_FAGN', clobber=False)
     fitsio.write(outfile, log_Fagn_std, extname='LOG_FAGN_STD', clobber=False)
+    fitsio.write(outfile, log_Fagn_low, extname='LOG_FAGN_LOW', clobber=False)
+    fitsio.write(outfile, log_Fagn_high, extname='LOG_FAGN_HIGH', clobber=False)
     

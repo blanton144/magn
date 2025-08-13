@@ -15,13 +15,16 @@ import mnsa
 import magn
 import magn.jiyan
 import mnsa.mnsautils
+import magn.defaults
 
 matplotlib.rcParams['font.size'] = 24
 matplotlib.rcParams['figure.figsize'] = [10., 7.]
 matplotlib.rcParams['text.usetex'] = True
 
 
-def plot_o3_threshold(redshift=None, cf=None, cf_ivar=None, agn_ratios=None, ax=None):
+def plot_o3_threshold(redshift=None, cf=None, cf_ivar=None, agn_ratios=None, ax=None,
+                      p1_threshold=magn.defaults.p1_threshold,
+                      p3_threshold=magn.defaults.p3_threshold):
     """Plot path in P1-P3 space
 
     Parameters
@@ -56,7 +59,7 @@ def plot_o3_threshold(redshift=None, cf=None, cf_ivar=None, agn_ratios=None, ax=
     test_p2 = np.zeros(len(o3s), dtype=np.float32)
     test_p3 = np.zeros(len(o3s), dtype=np.float32)
     for i, o3 in enumerate(o3s):
-        tmp_detected, tmp_isagn, tmp_lines = magn.jiyan.would_be_agn(cf=cf, cf_ivar=cf_ivar, agn_ratios=agn_ratios, log_flux_o3=o3)
+        tmp_detected, tmp_isagn, tmp_lines = magn.jiyan.would_be_agn(cf=cf, cf_ivar=cf_ivar, agn_ratios=agn_ratios, log_flux_o3=o3, p1_threshold=p1_threshold, p3_threshold=p3_threshold)
         test_detected[i] = tmp_detected
         test_isagn[i] = tmp_isagn
         test_p1[i] = tmp_lines['p1']
@@ -83,6 +86,10 @@ if __name__ == '__main__':
                         type=str, default='0.3.2',
                         help='MNSA configuration version')
 
+    parser.add_argument('-A', '--alt-name', dest='altname',
+                        type=str, default='',
+                        help='alternative dir postfix')
+
     parser.add_argument('-o', '--old', dest='dr17',
                         required=False, help='dr17',
                         action='store_true',
@@ -91,6 +98,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     version = args.version
     dr17 = args.dr17
+    altname = args.altname
 
     print("Reading data", flush=True)
 
@@ -102,12 +110,14 @@ if __name__ == '__main__':
 
     agnfile = os.path.join(os.getenv('MNSA_DATA'),
                            version + '.analysis', 'agn',
-                           'jiyan', 'jiyan-agn-{v}.fits')
+                           'jiyan' + altname, 'jiyan-agn-{v}.fits')
     if(dr17):
         agnfile = agnfile.replace('agn-', 'agn-dr17-')
     agnfile = agnfile.format(v=version)
     agn = fitsio.read(agnfile)
     hdr = fitsio.read_header(agnfile, ext=1)
+    p1_threshold = np.float32(hdr['P1_THRESHOLD'])
+    p3_threshold = np.float32(hdr['P3_THRESHOLD'])
 
     agn_ratios = dict()
     names = ['OIII-5008', 'NII-6585', 'SII-6718', 'SII-6732', 'SII-6718+6732',
@@ -130,7 +140,7 @@ if __name__ == '__main__':
     ax.set_xlim([-1.3, 1.])
     ax.set_ylim([-0.35, 1.6])
 
-    ax.add_patch(matplotlib.patches.Rectangle((- 0.3, 0.55), 5, 5, alpha=0.3, edgecolor='blue'))
+    ax.add_patch(matplotlib.patches.Rectangle((p1_threshold, p3_threshold), 5, 5, alpha=0.3, edgecolor='blue'))
 
     igd = np.where((agn['good'] == True) & (agn['isagn'] == False))[0]
     idet = np.where((agn['detected'] == True) & (agn['isagn'] == False))[0]
@@ -167,7 +177,7 @@ if __name__ == '__main__':
             ccf_ivar[k] = cf_ivar[k][ii:ii + 1]
         #for n in agn.dtype.names:
             #print("{n}: {v}".format(v=agn[n][ii], n=n))
-        plot_o3_threshold(redshift=agn['z'][ii], cf=ccf, cf_ivar=ccf_ivar, agn_ratios=agn_ratios, ax=ax)
+        plot_o3_threshold(redshift=agn['z'][ii], cf=ccf, cf_ivar=ccf_ivar, agn_ratios=agn_ratios, ax=ax, p1_threshold=p1_threshold, p3_threshold=p3_threshold)
     
     plt.tight_layout()
 
@@ -177,7 +187,7 @@ if __name__ == '__main__':
         drtxt = ''
     pngfile = os.path.join(os.getenv('MNSA_DATA'),
                            version + '.analysis', 'agn',
-                           'jiyan', 'jiyan-agn{d}-select-{v}.png')
+                           'jiyan' + altname, 'jiyan-agn{d}-select-{v}.png')
     pngfile = pngfile.format(v=version, d=drtxt)
     plt.savefig(pngfile, dpi=300)
     subprocess.run(['convert', pngfile, '-trim', pngfile])

@@ -43,6 +43,10 @@ if __name__ == '__main__':
                         action='store_true',
                         default=False)
 
+    parser.add_argument('-A', '--alt-name', dest='altname',
+                        type=str, default='',
+                        help='alternative dir postfix')
+
     parser.add_argument('-m', '--mass-bins', dest='mass_binlist',
                         type=str, default=magn.defaults.mass_bin_edges,
                         help='mass bin edges')
@@ -63,6 +67,7 @@ if __name__ == '__main__':
     mass_binlist = args.mass_binlist
     ssfr_binlist = args.ssfr_binlist
     test = args.test
+    altname = args.altname
 
     ssfr_bin_edges = np.array(ssfr_binlist.split(','), dtype=np.float32)
     ssfr_nbins = len(ssfr_bin_edges) - 1
@@ -72,7 +77,7 @@ if __name__ == '__main__':
     mass_nbins = len(mass_bin_edges) - 1
     mass_bin_centers = 0.5 * (mass_bin_edges[:-1] + mass_bin_edges[1:])
 
-    agndir = os.path.join(os.getenv('MNSA_DATA'), version + '.analysis', 'agn', 'jiyan')
+    agndir = os.path.join(os.getenv('MNSA_DATA'), version + '.analysis', 'agn', 'jiyan' + altname)
 
     for mass_ibin in np.arange(mass_nbins, dtype=np.int32):
         for ssfr_ibin in np.arange(ssfr_nbins, dtype=np.int32):
@@ -204,7 +209,8 @@ if __name__ == '__main__':
             plt.savefig(os.path.join(agndir, pngname), dpi=300)
             plt.close()
 
-    cmds = ['montage', '-tile', '5x3', '-geometry', '4000x2400']
+    cmds = ['montage', '-tile', '{nm}x{ns}'.format(nm=mass_nbins, ns=ssfr_nbins), '-geometry',
+            '{nx}x{ny}'.format(nx=800 * mass_nbins, ny=800 *ssfr_nbins)]
     cmds_Fagn = cmds.copy()
     prefix = 'jiyan-schechter'
     if(dr17):

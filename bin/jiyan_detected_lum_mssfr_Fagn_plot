@@ -38,19 +38,29 @@ if __name__ == '__main__':
                         action='store_true',
                         default=False)
 
+    parser.add_argument('-A', '--alt-name', dest='altname',
+                        type=str, default='',
+                        help='alternative dir postfix')
+
     parser.add_argument('-t', '--test', dest='test',
                         type=str, default=None, required=False,
                         help='test name')
+
+    parser.add_argument('-T', '--luminosity-threshold', dest='luminosity_threshold',
+                        type=np.float32, default=magn.defaults.Fagn_loglum_threshold,
+                        help='version of luminosity to use')
 
     args = parser.parse_args()
     version = args.version
     dr17 = args.dr17
     luminosity_version = args.luminosity_version
+    Fagn_loglum_threshold = args.luminosity_threshold
     test = args.test
+    altname = args.altname
 
-    agndir = os.path.join(os.getenv('MNSA_DATA'), version + '.analysis', 'agn', 'jiyan')
+    agndir = os.path.join(os.getenv('MNSA_DATA'), version + '.analysis', 'agn', 'jiyan' + altname)
 
-    filename = 'jiyan-detected-lum-mssfr-{l}-Fagn-{v}.fits'.format(l=luminosity_version,
+    filename = 'jiyan-detected-lum-mssfr-{l}-fagn-{v}.fits'.format(l=luminosity_version,
                                                                    v=version)
     if(test):
         filename = filename.replace('jiyan-detected', 'jiyan-{t}-detected'.format(t=test))
@@ -63,11 +73,15 @@ if __name__ == '__main__':
     ssfr_bin_edges = fitsio.read(infile, ext='SSFR_BIN_EDGES')
     log_Fagn_mean = fitsio.read(infile, ext='LOG_FAGN')
     log_Fagn_std = fitsio.read(infile, ext='LOG_FAGN_STD')
+    log_Fagn_low = fitsio.read(infile, ext='LOG_FAGN_LOW')
+    log_Fagn_high = fitsio.read(infile, ext='LOG_FAGN_HIGH')
 
-    ilum = np.where(np.abs(Fagn_lum_cs - (magn.defaults.Fagn_loglum_threshold)) < 0.01)[0][0]
+    ilum = np.where(np.abs(Fagn_lum_cs - (Fagn_loglum_threshold)) < 0.01)[0][0]
 
     log_Fagn_mean_39 = log_Fagn_mean[:, :, ilum]
     log_Fagn_std_39 = log_Fagn_std[:, :, ilum]
+    log_Fagn_low_39 = log_Fagn_low[:, :, ilum]
+    log_Fagn_high_39 = log_Fagn_high[:, :, ilum]
 
     fig, ax = plt.subplots()
 
@@ -87,21 +101,22 @@ if __name__ == '__main__':
             else:
                 label = None
             ax.fill_between([mass_bin_edges[imass] + 0.02, mass_bin_edges[imass + 1] - 0.02],
-                            [log_Fagn_mean_39[imass, issfr] - log_Fagn_std_39[imass, issfr],
-                             log_Fagn_mean_39[imass, issfr] - log_Fagn_std_39[imass, issfr]],
-                            [log_Fagn_mean_39[imass, issfr] + log_Fagn_std_39[imass, issfr],
-                             log_Fagn_mean_39[imass, issfr] + log_Fagn_std_39[imass, issfr]],
+                            [log_Fagn_low_39[imass, issfr], log_Fagn_low_39[imass, issfr]],
+                            [log_Fagn_high_39[imass, issfr], log_Fagn_high_39[imass, issfr]],
                             color=colors[issfr], alpha=0.6, label=label)
 
     ax.set_ylim([-3.3, 0.15])
+    ax.set_xlim([9.2, 11.8])
     ax.set_xlabel(r'${\rm log}_{10} M_\ast {\rm (}M_\odot{\rm )}$')
     ax.set_ylabel(r'${\rm log}_{10} f_{\rm detected}(L_{{\rm H}\beta, {\rm corr}} > 10^{39}~{\rm erg}~{\rm s}^{-1})$')
     ax.legend(loc='upper left')
 
-    pngname = 'jiyan-detected-lum-mssfr-{l}-Fagn-{v}.png'.format(l=luminosity_version,
+    pngname = 'jiyan-detected-lum-mssfr-{l}-fagn-{v}.png'.format(l=luminosity_version,
                                                                  v=version)
     if(test):
         pngname = pngname.replace('jiyan-detected', 'jiyan-{t}-detected'.format(t=test))
+    if(Fagn_loglum_threshold != magn.defaults.Fagn_loglum_threshold):
+        pngname = pngname.replace('fagn-', 'fagn-gt-{t}-'.format(t=Fagn_loglum_threshold))
     plt.savefig(os.path.join(agndir, pngname), dpi=300)
     plt.close()
 

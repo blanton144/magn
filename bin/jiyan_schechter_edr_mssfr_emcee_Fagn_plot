@@ -47,16 +47,26 @@ if __name__ == '__main__':
                         type=str, default=None, required=False,
                         help='test name')
 
+    parser.add_argument('-A', '--alt-name', dest='altname',
+                        type=str, default='',
+                        help='alternative dir postfix')
+
+    parser.add_argument('-T', '--edr-threshold', dest='edr_threshold',
+                        type=np.float32, default=magn.defaults.Fagn_logedr_threshold,
+                        help='version of luminosity to use')
+
     args = parser.parse_args()
     version = args.version
     dr17 = args.dr17
     mbh_version = args.mbh_version
     bolo_version = args.bolo_version
     test = args.test
+    altname = args.altname
+    Fagn_logedr_threshold = args.edr_threshold
 
-    agndir = os.path.join(os.getenv('MNSA_DATA'), version + '.analysis', 'agn', 'jiyan')
+    agndir = os.path.join(os.getenv('MNSA_DATA'), version + '.analysis', 'agn', 'jiyan' + altname)
 
-    filename = 'jiyan-schechter-emcee-edr-mssfr-{m}-{b}-fagn-{v}.fits'.format(m=mbh_version,
+    filename = 'jiyan-schechter-emcee-edr-mssfr-{m}-{b}-Fagn-{v}.fits'.format(m=mbh_version,
                                                                               b=bolo_version,
                                                                               v=version)
     if(dr17):
@@ -74,7 +84,7 @@ if __name__ == '__main__':
     log_Fagn_median = fitsio.read(infile, ext='LOG_FAGN_MEDIAN')
     log_Fagn_std = fitsio.read(infile, ext='LOG_FAGN_STD')
 
-    ilambda = np.where(np.abs(Fagn_lambda_cs - magn.defaults.Fagn_logedr_threshold) < 0.01)[0][0]
+    ilambda = np.where(np.abs(Fagn_lambda_cs - Fagn_logedr_threshold) < 0.01)[0][0]
 
     print(ilambda)
     log_Fagn_mean_3 = log_Fagn_mean[:, :, ilambda]
@@ -104,7 +114,7 @@ if __name__ == '__main__':
 
     ax.set_ylim([-3.3, 0.15])
     ax.set_xlabel(r'${\rm log}_{10} M_\ast {\rm (}M_\odot{\rm )}$')
-    ax.set_ylabel(r'${\rm log}_{10} F_{\rm AGN}(\lambda_{{\rm H}\beta, {\rm corr}} > 10^{' + str(int(magn.defaults.Fagn_logedr_threshold)) + r'})$')
+    ax.set_ylabel(r'${\rm log}_{10} F_{\rm AGN}(\lambda_{{\rm H}\beta, {\rm corr}} > 10^{' + str(int(Fagn_logedr_threshold)) + r'})$')
     ax.legend(loc='upper left')
         
     pngname = 'jiyan-schechter-emcee-edr-mssfr-{m}-{b}-Fagn-{v}.png'.format(m=mbh_version,
@@ -114,6 +124,8 @@ if __name__ == '__main__':
         pngname = pngname.replace('jiyan-', 'jiyan-dr17-')
     if(test):
         pngname = pngname.replace('jiyan-schechter', 'jiyan-{t}-schechter'.format(t=test))
+    if(Fagn_logedr_threshold != magn.defaults.Fagn_logedr_threshold):
+        pngname = pngname.replace('Fagn-', 'Fagn-gt-{t}-'.format(t=np.abs(Fagn_logedr_threshold)))
     plt.savefig(os.path.join(agndir, pngname), dpi=300)
     plt.close()
 
