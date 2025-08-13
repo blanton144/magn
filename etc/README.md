@@ -64,7 +64,7 @@ The `manga-nlr-agn-0.3.2.fits` files have a single table in `HDU2`:
 | `p2_err`                           | `float32` | dex                     | Error in P2                                          |
 | `p3`                               | `float32` | dex                     | P3 (Ji and Yan 2020)                                 |
 | `p3_err`                           | `float32` | dex                     | Error in P3                                          |
-| `o3`                               | `float32` | $10^{-17}$ erg/cm$``^2$/s | Flux in [OIII] 5008                                  |
+| `o3`                               | `float32` | $10^{-17}$ erg/cm$ ^2$/s | Flux in [OIII] 5008                                  |
 | `o3_err`                           | `float32` | $10^{-17}$ erg/cm^2/s | Error in `o3`                                        |
 | `n2ha`                             | `float32` | dex                     | Log of [NII] 6585 / H$\alpha$ ratio                  |
 | `n2ha_err`                         | `float32` | dex                     | Error in `n2ha`                                      |
@@ -76,7 +76,7 @@ The `manga-nlr-agn-0.3.2.fits` files have a single table in `HDU2`:
 | `hahb_err`                         | `float32` | dex                     | Error in `hahb`                                      |
 | `hahb_av`                          | `float32` | mag                     | $A_V$ inferred from `hahb`                           |
 | `o3_dust_correction`               | `float32` |                         | Dust correction for [OIII]                           |
-| `ha_dust_correction`               | `float32` |                         | Dust correction for H$\alpha$                        |
+| `ha_dust_correction`               | `float32` |                         | Dust correction for H$ \alpha$                        |
 | `hb_dust_correction`               | `float32` |                         | Dust correction for H$\beta$                         |
 | `log_luminosity_o3`                | `float32` | $log_{10}$(erg/s)       | Log of [OIII] luminosity                             |
 | `log_luminosity_o3_threshold`      | `float32` | $log_{10}$(erg/s)       | Log of [OIII] luminosity threshold                   |
