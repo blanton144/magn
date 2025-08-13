@@ -64,8 +64,8 @@ The `manga-nlr-agn-0.3.2.fits` files have a single table in `HDU2`:
 | `p2_err`                           | `float32` | dex                     | Error in P2                                          |
 | `p3`                               | `float32` | dex                     | P3 (Ji and Yan 2020)                                 |
 | `p3_err`                           | `float32` | dex                     | Error in P3                                          |
-| `o3`                               | `float32` | $10^{-17}$ erg/cm${}^2$/s | Flux in [OIII] 5008                                  |
-| `o3_err`                           | `float32` | $10^{-17}$ erg/cm${}^2$/s | Error in `o3`                                        |
+| `o3`                               | `float32` | $10^{-17}$ erg/cm$^2$/s | Flux in [OIII] 5008                                  |
+| `o3_err`                           | `float32` | $10^{-17}$ erg/cm$^2$/s | Error in `o3`                                        |
 | `n2ha`                             | `float32` | dex                     | Log of [NII] 6585 / H$\alpha$ ratio                  |
 | `n2ha_err`                         | `float32` | dex                     | Error in `n2ha`                                      |
 | `s2ha`                             | `float32` | dex                     | Log of [SII] 6718,6732 / H$\alpha$ ratio             |
