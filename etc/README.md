@@ -66,28 +66,28 @@ The `manga-nlr-agn-0.3.2.fits` files have a single table in `HDU2`:
 | `p3_err`                           | `float32` | dex                 | Error in P3                                          |
 | `o3`                               | `float32` | 10^{-17} erg/cm^2/s | Flux in [OIII] 5008                                  |
 | `o3_err`                           | `float32` | 10^{-17} erg/cm^2/s | Error in `o3`                                        |
-| `n2ha`                             | `float32` | dex                 | Log of [NII] 6585 / H$\alpha$ ratio                  |
+| `n2ha`                             | `float32` | dex                 | Log of [NII] 6585 / Halpha ratio                  |
 | `n2ha_err`                         | `float32` | dex                 | Error in `n2ha`                                      |
-| `s2ha`                             | `float32` | dex                 | Log of [SII] 6718,6732 / H$\alpha$ ratio             |
+| `s2ha`                             | `float32` | dex                 | Log of [SII] 6718,6732 / Halpha ratio             |
 | `s2ha_err`                         | `float32` | dex                 | Error in `s2ha`                                      |
-| `o3hb`                             | `float32` | dex                 | Log of [OIII] 5008 / H$\beta$ ratio                  |
+| `o3hb`                             | `float32` | dex                 | Log of [OIII] 5008 / Hbeta ratio                  |
 | `o3hb_err`                         | `float32` | dex                 | Error in `o3hb`                                      |
-| `hahb`                             | `float32` | dex                 | Log of H$\alpha$ / H$\beta$ ratio                    |
+| `hahb`                             | `float32` | dex                 | Log of Halpha / Hbeta ratio                    |
 | `hahb_err`                         | `float32` | dex                 | Error in `hahb`                                      |
 | `hahb_av`                          | `float32` | mag                 | $A_V$ inferred from `hahb`                           |
 | `o3_dust_correction`               | `float32` |                     | Dust correction for [OIII]                           |
-| `ha_dust_correction`               | `float32` |                     | Dust correction for H$\alpha$                        |
-| `hb_dust_correction`               | `float32` |                     | Dust correction for H$\beta$                         |
+| `ha_dust_correction`               | `float32` |                     | Dust correction for Halpha                        |
+| `hb_dust_correction`               | `float32` |                     | Dust correction for Hbeta                         |
 | `log_luminosity_o3`                | `float32` | log10(erg/s)        | Log of [OIII] luminosity                             |
 | `log_luminosity_o3_threshold`      | `float32` | log10(erg/s)        | Log of [OIII] luminosity threshold                   |
 | `log_luminosity_o3_corr`           | `float32` | log10(erg/s)        | Log of [OIII] dust-corrected luminosity              |
 | `log_luminosity_o3_corr_threshold` | `float32` | log10(erg/s)        | Log of [OIII] dust-corrected luminosity threshold    |
-| `log_luminosity_ha`                | `float32` | log10(erg/s)        | Log of H$\alpha$ luminosity                          |
-| `log_luminosity_ha_threshold`      | `float32` | log10(erg/s)        | Log of H$\alpha$ luminosity threshold                |
-| `log_luminosity_ha_corr`           | `float32` | log10(erg/s)        | Log of H$\alpha$ dust-corrected luminosity           |
-| `log_luminosity_ha_corr_threshold` | `float32` | log10(erg/s)        | Log of H$\alpha$ dust-corrected luminosity threshold |
-| `log_luminosity_hb`                | `float32` | log10(erg/s)        | Log of H$\beta$ luminosity                           |
-| `log_luminosity_hb_threshold`      | `float32` | log10(erg/s)        | Log of H$\beta$ luminosity threshold                 |
-| `log_luminosity_hb_corr`           | `float32` | log10(erg/s)        | Log of H$\beta$ dust-corrected luminosity            |
-| `log_luminosity_hb_corr_threshold` | `float32` | log10(erg/s)        | Log of H$\beta$ dust-corrected luminosity threshold  |
+| `log_luminosity_ha`                | `float32` | log10(erg/s)        | Log of Halpha luminosity                          |
+| `log_luminosity_ha_threshold`      | `float32` | log10(erg/s)        | Log of Halpha luminosity threshold                |
+| `log_luminosity_ha_corr`           | `float32` | log10(erg/s)        | Log of Halpha dust-corrected luminosity           |
+| `log_luminosity_ha_corr_threshold` | `float32` | log10(erg/s)        | Log of Halpha dust-corrected luminosity threshold |
+| `log_luminosity_hb`                | `float32` | log10(erg/s)        | Log of Hbeta luminosity                           |
+| `log_luminosity_hb_threshold`      | `float32` | log10(erg/s)        | Log of Hbeta luminosity threshold                 |
+| `log_luminosity_hb_corr`           | `float32` | log10(erg/s)        | Log of Hbeta dust-corrected luminosity            |
+| `log_luminosity_hb_corr_threshold` | `float32` | log10(erg/s)        | Log of Hbeta dust-corrected luminosity threshold  |
 
