@@ -1,0 +1,124 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import argparse
+import numpy as np
+import magn.schechter_likelihood
+import matplotlib
+import matplotlib.pyplot as plt
+import scipy.optimize
+import emcee
+import fitsio
+import scipy.integrate
+
+
+matplotlib.rcParams['figure.figsize'] = [10., 8]
+matplotlib.rcParams['font.size'] = 20
+matplotlib.rcParams['text.usetex'] = True
+
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(
+        prog=os.path.basename(sys.argv[0]),
+        description='Plot emcee results')
+
+    parser.add_argument('-v', '--version', dest='version',
+                        type=str, default='0.3.2',
+                        help='MNSA configuration version')
+
+    parser.add_argument('-o', '--old', dest='dr17',
+                        required=False, help='dr17',
+                        action='store_true',
+                        default=False)
+
+    parser.add_argument('-t', '--test', dest='test',
+                        required=False, help='test',
+                        action='store_true',
+                        default=False)
+
+    
+    args = parser.parse_args()
+    version = args.version
+    dr17 = args.dr17
+    test = args.test
+
+    agndir = os.path.join(os.getenv('MNSA_DATA'), version + '.analysis', 'agn', 'jiyan')
+
+    summary = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
+                                       '{v}', 'mnsa-{v}.fits').format(v=version),
+                          ext='SUMMARY')
+
+    sps = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
+                                   '{v}', 'mnsa-{v}.fits').format(v=version),
+                      ext='SPS_AP07')
+
+    pipe3d = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
+                                      '{v}', 'mnsa-{v}.fits').format(v=version),
+                         ext='PIPE3D')
+    log_ssfr = pipe3d['log_SFR_D_C'] - pipe3d['log_Mass']
+    log_mass = pipe3d['log_Mass']
+
+    agndir = os.path.join(os.getenv('MNSA_DATA'), version + '.analysis', 'agn', 'jiyan')
+    agnfile = os.path.join(agndir, 'jiyan-agn-{v}.fits')
+    if(dr17):
+        agnfile = agnfile.replace('agn-', 'agn-dr17-')
+    if(test):
+        agnfile = agnfile.replace('jiyan-agn', 'jiyan-agn-test')
+    agnfile = agnfile.format(v=version)
+    agn = fitsio.read(agnfile)
+
+    good = (agn['good'] > 0)
+    isagn = (agn['isagn'] > 0)
+    mainbits = (2**10 | 2**11 | 2**12)
+    ismain = (((summary['mngtarg1'] & mainbits) != 0) &
+              (summary['esrweight'] > 0.))
+    bothcolors = ((sps['absmag_ivar_f'] > 0.) &
+                  (sps['absmag_ivar_r'] > 0.))
+
+    ronly = ((sps['absmag_ivar_f'] <= 0.) &
+             (sps['absmag_ivar_r'] > 0.))
+    fonly = ((sps['absmag_ivar_f'] > 0.) &
+             (sps['absmag_ivar_r'] <= 0.))
+
+    iagn = np.where(good & isagn & ismain & bothcolors)[0]
+    ithreshold = np.where(good & (isagn == False) & ismain & bothcolors)[0]
+
+    iagn_f = np.where(good & isagn & ismain & fonly)[0]
+    ithreshold_f = np.where(good & (isagn == False) & ismain & fonly)[0]
+
+    iagn_r = np.where(good & isagn & ismain & ronly)[0]
+    ithreshold_r = np.where(good & (isagn == False) & ismain & ronly)[0]
+
+    Fmr = sps['absmag_f'] - sps['absmag_r']
+    Fmr_upper = sps['absmag_f'] - sps['absmag_limit_r']
+    Fmr_lower = sps['absmag_limit_f'] - sps['absmag_r']
+
+    fig, ax = plt.subplots()
+
+    ax.scatter(log_ssfr[ithreshold], Fmr[ithreshold], color='black', alpha=0.4, s=7,
+               label='${\rm AGN upper limits}$')
+    ax.scatter(log_ssfr[iagn], Fmr[iagn], color='red', alpha=1.0, s=45)
+
+    ax.errorbar(log_ssfr[ithreshold_r], Fmr_lower[ithreshold_r], yerr=1., color='black',
+                lolims=True, alpha=0.15, label='${\rm AGN upper limits}$', fmt='none')
+    ax.errorbar(log_ssfr[iagn_r], Fmr_lower[iagn_r], yerr=1., color='red',
+                lolims=True, alpha=0.15, label='${\rm AGN}$', fmt='none')
+
+    ax.errorbar(log_ssfr[ithreshold_f], Fmr_upper[ithreshold_f], yerr=1., color='black',
+                uplims=True, alpha=0.15, label='${\rm AGN upper limits}$', fmt='none')
+    ax.errorbar(log_ssfr[iagn_f], Fmr_upper[iagn_f], yerr=1., color='red',
+                uplims=True, alpha=0.15, label='${\rm AGN}$', fmt='none')
+
+    ax.set_xlabel(r'${\rm log}_{10} {\rm sSFR} / {\rm yr}^{-1}$')
+    ax.set_ylabel(r'$F - r$')
+
+    ax.set_xlim([-16.2, -9.1])
+    ax.set_ylim([-1., 10.])
+   
+    pngname = 'jiyan-ssfr-color-{v}.png'.format(v=version)
+    if(test):
+        pngname = pngname.replace('jiyan-ssfr-color', 'jiyan-test-ssfr-color')
+    plt.savefig(os.path.join(agndir, pngname), dpi=300)
+    plt.close()

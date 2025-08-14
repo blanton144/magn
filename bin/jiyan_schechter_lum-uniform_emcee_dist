@@ -1,0 +1,171 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import argparse
+import numpy as np
+import magn.schechter_likelihood
+import matplotlib.pyplot as plt
+import scipy.optimize
+import emcee
+import fitsio
+import scipy.integrate
+
+
+np.random.seed(102)
+
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(
+        prog=os.path.basename(sys.argv[0]),
+        description='Fit Schechter to full Jiyan sample')
+
+    parser.add_argument('-c', '--clobber', dest='clobber',
+                        action='store_true', default=False,
+                        help='Clobber emcee results')
+
+    parser.add_argument('-v', '--version', dest='version',
+                        type=str, default='0.3.2',
+                        help='MNSA configuration version')
+
+    parser.add_argument('-l', '--luminosity-version', dest='luminosity_version',
+                        type=str, default='hb_corr',
+                        help='version of luminosity to use')
+
+    parser.add_argument('-o', '--old', dest='dr17',
+                        required=False, help='dr17',
+                        action='store_true',
+                        default=False)
+
+    
+    args = parser.parse_args()
+    version = args.version
+    clobber = args.clobber
+    dr17 = args.dr17
+    luminosity_version = args.luminosity_version
+
+    summary = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
+                                       '{v}', 'mnsa-{v}.fits').format(v=version),
+                          ext='SUMMARY')
+
+    pipe3d = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
+                                      '{v}', 'mnsa-{v}.fits').format(v=version),
+                         ext='PIPE3D')
+
+    
+    agndir = os.path.join(os.getenv('MNSA_DATA'), version + '.analysis', 'agn', 'jiyan')
+    agnfile = os.path.join(agndir, 'jiyan-agn-{v}.fits')
+    if(dr17):
+        agnfile = agnfile.replace('agn-', 'agn-dr17-')
+    agnfile = agnfile.format(v=version)
+    agn = fitsio.read(agnfile)
+
+    good = (agn['good'] > 0)
+    isagn = (agn['isagn'] > 0)
+    mainbits = (2**10 | 2**11 | 2**12)
+    ismain = ((summary['mngtarg1'] & mainbits) != 0)
+    offset = 42.5
+
+    log_lum_all = agn['log_luminosity_{v}'.format(v=luminosity_version)] - offset
+    log_lum_threshold_all = agn['log_luminosity_{v}_threshold'.format(v=luminosity_version)] - offset
+
+    iagn = np.where(good & isagn & ismain)[0]
+    ithreshold = np.where(good & (isagn == False) & ismain)[0]
+
+    nagn = len(iagn)
+    nthreshold = len(ithreshold)
+
+    log_lum = log_lum_all[iagn]
+    log_lum_threshold = log_lum_threshold_all[ithreshold]
+
+    properties = np.ones(nagn, dtype=np.float32)
+    properties_threshold = np.ones(nthreshold, dtype=np.float32)
+
+    # Prior range definition
+    alpha_0_range = np.array([-1.9, 2.4])
+    log_lum_min_range = np.array([30.0, 37.5]) - offset
+    log_lum_star_range = np.array([37.5, 43.0]) - offset
+    log_lum_max = log_lum_star_range[1]
+    
+    # Make a grid of the neg log like
+    beta = 0.
+    log_lum_star = 42. - offset
+
+    # Create likelihood object
+    schlike = magn.schechter_likelihood.SchechterLikelihood(log_lambdas=log_lum,
+                                                            log_lambda_threshold=log_lum_threshold,
+                                                            properties=properties,
+                                                            properties_threshold=properties_threshold,
+                                                            alpha_0_range=alpha_0_range,
+                                                            log_lambda_star_range=log_lum_star_range,
+                                                            log_lambda_min_range=log_lum_min_range)
+    
+    # Now run emcee
+    nwalkers = 16
+    ndim = 3
+    log_lum_star_st = - 0.5 + np.random.normal() * 0.2
+    alpha_st = 1.5 + np.random.normal() * 0.2
+    log_lum_min_st = log_lum_min_range[1] - 2. + np.random.normal() * 0.2
+    theta_st = np.array([alpha_st, log_lum_star_st, log_lum_min_st])
+    theta_0 = (np.outer(np.ones(nwalkers), theta_st) +
+               np.random.normal(size=(nwalkers, ndim)) * 0.2)
+    itoohigh = np.where(theta_0[:, 2] > log_lum_min_range[1])[0]
+    theta_0[itoohigh, 2] = log_lum_min_range[1] - 0.1
+    schlike.sign = 1.  # maximize
+    sampler = emcee.EnsembleSampler(nwalkers, ndim, schlike)
+
+    print("emcee Burn-in", flush=True)
+    state = sampler.run_mcmc(theta_0, 100)
+    sampler.reset()
+
+    print("emcee Run", flush=True)
+    sampler.run_mcmc(state, 10000)
+    chain_vals = sampler.get_chain(flat=True)
+
+    print("Mean acceptance fraction: {0:.3f}".format(np.mean(sampler.acceptance_fraction)), flush=True)
+    print("Mean autocorrelation time: {0:.3f}".format(np.mean(sampler.get_autocorr_time())), flush=True)
+    
+
+    Fagn_lum_c_min = 38.0
+    Fagn_lum_c_max = 42.0
+    nFagn = 21
+    Fagn_lum_cs = (Fagn_lum_c_min + (Fagn_lum_c_max - Fagn_lum_c_min) *
+                   np.arange(nFagn, dtype=np.float32) / np.float32(nFagn - 1))
+    
+    fit_dtype = np.dtype([('loglike', np.float32),
+                          ('alpha', np.float32),
+                          ('log_lum_star', np.float32),
+                          ('log_lum_min', np.float32),
+                          ('Fagn', np.float32, nFagn)])
+    chain = np.zeros(chain_vals.shape[0], dtype=fit_dtype)
+    
+    for i in np.arange(len(chain), dtype=np.int32):
+        if((i % 1000) == 0):
+            print(i, flush=True)
+        chain['alpha'][i] = chain_vals[i, 0]
+        chain['log_lum_star'][i] = chain_vals[i, 1] + offset
+        chain['log_lum_min'][i] = chain_vals[i, 2] + offset
+        theta = chain_vals[i, :]
+        chain['loglike'][i] = schlike(theta)
+        for j, Fagn_lum_c in enumerate(Fagn_lum_cs):
+            chain['Fagn'][i, j] = magn.schechter_likelihood.Fabove(alpha=chain['alpha'][i],
+                                                                   log_lambda_star=chain['log_lum_star'][i] - offset,
+                                                                   log_lambda_min=chain['log_lum_min'][i] - offset,
+                                                                   log_lambda_c=Fagn_lum_c - offset)
+
+    filename = 'jiyan-schechter-emcee-lum-uniform-{l}-{v}.fits'.format(l=luminosity_version,
+                                                                       v=version)
+    outfile = os.path.join(agndir, filename)
+
+    hdr = []
+    hdr.append({'name': 'NFAGN',
+                'value': nFagn,
+                'comment': 'size of Fagn array'})
+    hdr.append({'name': 'FAGN_LUM_C_MIN',
+                'value': Fagn_lum_c_min,
+                'comment': 'minimum luminosity threshold'})
+    hdr.append({'name': 'FAGN_LUM_C_MAX',
+                'value': Fagn_lum_c_max,
+                'comment': 'maximum luminosity threshold'})
+    fitsio.write(outfile, chain, header=hdr, clobber=True)

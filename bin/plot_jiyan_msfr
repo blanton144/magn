@@ -1,0 +1,97 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import subprocess
+import argparse
+import numpy as np
+import matplotlib
+import matplotlib.pyplot as plt
+import fitsio
+
+
+matplotlib.rcParams['figure.figsize'] = [9., 6.]
+matplotlib.rcParams['font.size'] = 24.
+matplotlib.rcParams['text.usetex'] = True
+
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(
+        prog=os.path.basename(sys.argv[0]),
+        description='Fit Schechter to full Jiyan sample')
+
+    parser.add_argument('-c', '--clobber', dest='clobber',
+                        action='store_true', default=False,
+                        help='Clobber emcee results')
+
+    parser.add_argument('-v', '--version', dest='version',
+                        type=str, default='0.3.2',
+                        help='MNSA configuration version')
+
+    parser.add_argument('-o', '--old', dest='dr17',
+                        required=False, help='dr17',
+                        action='store_true',
+                        default=False)
+
+    
+    args = parser.parse_args()
+    version = args.version
+    clobber = args.clobber
+    dr17 = args.dr17
+
+    pipe3d = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
+                                      '{v}', 'mnsa-{v}.fits').format(v=version),
+                         ext='PIPE3D')
+
+    agnfile = os.path.join(os.getenv('MNSA_DATA'),
+                           version + '.analysis', 'agn',
+                           'jiyan', 'jiyan-agn-{v}.fits')
+    if(dr17):
+        agnfile = agnfile.replace('agn-', 'agn-dr17-')
+    agnfile = agnfile.format(v=version)
+    agn = fitsio.read(agnfile)
+
+    paramsfile = os.path.join(os.getenv('MNSA_DATA'),
+                           version + '.analysis', 'agn',
+                           'jiyan', 'jiyan-agn-params-{v}.fits')
+    if(dr17):
+        paramsfile = paramsfile.replace('agn-', 'agn-dr17-')
+    paramsfile = paramsfile.format(v=version)
+    params = fitsio.read(paramsfile, ext='PARAMS')
+    mbhvs = fitsio.read(paramsfile, ext='MBH_VERSIONS')
+    bolovs = fitsio.read(paramsfile, ext='BOLO_VERSIONS')
+
+    good = (agn['good']) & (params['vdisp'] > 60.)
+
+    isagn = agn['isagn'][good]
+    iagn = np.where(isagn == True)[0]
+    ithreshold = np.where(isagn == False)[0]
+
+    log_ssfr = pipe3d['log_SFR_D_C'][good] - pipe3d['log_Mass'][good]
+    log_mass = pipe3d['log_Mass'][good]
+                
+    fig, ax = plt.subplots()
+
+    ax.scatter(log_mass[ithreshold], log_ssfr[ithreshold], s=7, color='black',
+               label=r'{\rm AGN upper limits}', alpha=0.5)
+    ax.scatter(log_mass[iagn], log_ssfr[iagn], s=30, color='red',
+               label=r'{\rm AGN detected}', alpha=0.8)
+
+    ax.set_xlim([9., 12.1])
+    ax.set_ylim([-17., -9.])
+
+    ax.set_xlabel(r'${\rm log}_{10} M_\ast / M_\odot$')
+    ax.set_ylabel(r'${\rm log}_{10} {\rm ~sSFR~} / {\rm ~yr}^{-1}$')
+
+    ax.legend()
+
+    plt.tight_layout()
+
+    pngfile = os.path.join(os.getenv('MNSA_DATA'),
+                           version + '.analysis', 'agn',
+                           'jiyan', 'jiyan-msfr-{v}.png'.format(v=version))
+
+    plt.savefig(pngfile, dpi=300)
+    plt.close()
+    subprocess.run(['convert', pngfile, '-trim', pngfile])

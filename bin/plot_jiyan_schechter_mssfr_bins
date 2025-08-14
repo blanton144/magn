@@ -1,0 +1,201 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import argparse
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib
+import fitsio
+
+matplotlib.rcParams['text.usetex'] = True
+matplotlib.rcParams['font.size'] = 14
+
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(
+        prog=os.path.basename(sys.argv[0]),
+        description='Fit Schechter to full Jiyan sample')
+
+    parser.add_argument('-v', '--version', dest='version',
+                        type=str, default='0.3.2',
+                        help='MNSA configuration version')
+
+    parser.add_argument('-o', '--old', dest='dr17',
+                        required=False, help='dr17',
+                        action='store_true',
+                        default=False)
+
+    parser.add_argument('-m', '--mass-bins', dest='mass_binlist',
+                        type=str, default='9.25,10.25,10.75,11.25,11.75',
+                        help='mass bin edges')
+
+    parser.add_argument('-s', '--ssfr-bins', dest='ssfr_binlist',
+                        type=str, default='-16.5,-13.0,-11.0,-9.5',
+                        help='ssfr bin edges')
+
+    parser.add_argument('-x', '--mbh-version', dest='mbh_version',
+                        type=str, default=None, required=False,
+                        help='M-sigma version')
+
+    parser.add_argument('-b', '--bolo-version', dest='bolo_version',
+                        type=str, default=None, required=False,
+                        help='bolometric luminosity version')
+    
+    args = parser.parse_args()
+    version = args.version
+    dr17 = args.dr17
+    mass_binlist = args.mass_binlist
+    ssfr_binlist = args.ssfr_binlist
+    mbh_version = args.mbh_version
+    bolo_version = args.bolo_version
+
+    ssfr_bin_edges = np.array(ssfr_binlist.split(','), dtype=np.float32)
+    ssfr_nbins = len(ssfr_bin_edges) - 1
+    ssfr_bin_centers = 0.5 * (ssfr_bin_edges[:-1] + ssfr_bin_edges[1:])
+
+    mass_bin_edges = np.array(mass_binlist.split(','), dtype=np.float32)
+    mass_nbins = len(mass_bin_edges) - 1
+    mass_bin_centers = 0.5 * (mass_bin_edges[:-1] + mass_bin_edges[1:])
+
+    paramsfile = os.path.join(os.getenv('MNSA_DATA'),
+                           version + '.analysis', 'agn',
+                           'jiyan', 'jiyan-agn-params-{v}.fits')
+    if(dr17):
+        paramsfile = paramsfile.replace('agn-', 'agn-dr17-')
+    paramsfile = paramsfile.format(v=version)
+    mbhvs = fitsio.read(paramsfile, ext='MBH_VERSIONS')
+    bolovs = fitsio.read(paramsfile, ext='BOLO_VERSIONS')
+
+    cf = dict()
+    for imbh, mbhv in enumerate(mbhvs['mbh_version']):
+        if(mbh_version is not None):
+            if(mbh_version != mbhv):
+                continue
+
+        for ibolo, bolov in enumerate(bolovs['bolo_version']):
+            if(bolo_version is not None):
+                if(bolo_version != bolov):
+                    continue
+
+            for mass_ibin in np.arange(mass_nbins, dtype=np.int32):
+                for ssfr_ibin in np.arange(ssfr_nbins, dtype=np.int32):
+                    filename = 'jiyan-schechter-emcee-{m}-{b}-mass{j}-ssfr{i}-{v}.fits'.format(m=mbhv, b=bolov, v=version, i=ssfr_ibin, j=mass_ibin)
+                    if(os.path.exists(filename) is False):
+                        continue
+                    print(filename)
+                    chain = fitsio.read(filename)
+                    cf[mbhv, bolov, mass_ibin, ssfr_ibin] = dict()
+                    cf[mbhv, bolov, mass_ibin, ssfr_ibin]['log_lambda_c'] = np.array([-3.5, -3.0, -2.5, -2.0], dtype=np.float32)
+                    cf[mbhv, bolov, mass_ibin, ssfr_ibin]['log_Fagn'] = np.zeros(4, dtype=np.float32)
+                    cf[mbhv, bolov, mass_ibin, ssfr_ibin]['log_Fagn_err'] = np.zeros(4, dtype=np.float32)
+                    cf[mbhv, bolov, mass_ibin, ssfr_ibin]['log_Fagn'][0] = np.log10(chain['Fagn_3_5']).mean()
+                    cf[mbhv, bolov, mass_ibin, ssfr_ibin]['log_Fagn_err'][0] = np.log10(chain['Fagn_3_5']).std()
+                    cf[mbhv, bolov, mass_ibin, ssfr_ibin]['log_Fagn'][1] = np.log10(chain['Fagn_3_0']).mean()
+                    cf[mbhv, bolov, mass_ibin, ssfr_ibin]['log_Fagn_err'][1] = np.log10(chain['Fagn_3_0']).std()
+                    cf[mbhv, bolov, mass_ibin, ssfr_ibin]['log_Fagn'][2] = np.log10(chain['Fagn_2_5']).mean()
+                    cf[mbhv, bolov, mass_ibin, ssfr_ibin]['log_Fagn_err'][2] = np.log10(chain['Fagn_2_5']).std()
+                    cf[mbhv, bolov, mass_ibin, ssfr_ibin]['log_Fagn'][3] = np.log10(chain['Fagn_2_0']).mean()
+                    cf[mbhv, bolov, mass_ibin, ssfr_ibin]['log_Fagn_err'][3] = np.log10(chain['Fagn_2_0']).std()
+
+    fig, ax = plt.subplots()
+    
+    colors = ['red', 'green', 'blue', 'black']
+    styles = ['solid', 'dashed', 'dotted', 'dashdot']
+    for imbh, mbhv in enumerate(mbhvs['mbh_version']):
+        if(mbh_version is not None):
+            if(mbh_version != mbhv):
+                continue
+
+        for ibolo, bolov in enumerate(bolovs['bolo_version']):
+            if(bolo_version is not None):
+                if(bolo_version != bolov):
+                    continue
+
+            for mass_ibin in np.arange(mass_nbins, dtype=np.int32):
+                for ssfr_ibin in np.arange(ssfr_nbins, dtype=np.int32):
+                    if((mbhv, bolov, mass_ibin, ssfr_ibin) not in cf):
+                        continue
+                    ccf = cf[mbhv, bolov, mass_ibin, ssfr_ibin]
+                    color = colors[ibolo]
+                    style = styles[imbh]
+                    ax.plot(ccf['log_lambda_c'], ccf['log_Fagn'], linewidth=2 + mass_ibin,
+                            color=color, linestyle=style,
+                            label='{a} {b}'.format(a=mbhv, b=bolov))
+                    ax.errorbar(ccf['log_lambda_c'], ccf['log_Fagn'], ccf['log_Fagn_err'], color=color, linestyle='none')
+
+    ax.legend()
+    ax.set_ylabel(r'$\log_{10} F_{\rm AGN}(\lambda >\lambda_c)$')
+    ax.set_xlabel(r'$\log_{10} \lambda_c$')
+    ax.set_xlim([-3.8, -1.])
+
+    pngbase = 'Fagn-mssfrbins'
+    if(mbh_version is not None):
+        pngbase = pngbase + '-' + mbh_version
+    if(bolo_version is not None):
+        pngbase = pngbase + '-' + bolo_version
+    pngfile = pngbase + ".png"
+    plt.savefig(pngfile, dpi=300)
+    plt.close()
+
+    fig, ax = plt.subplots()
+
+    colors = ['red', 'green', 'blue', 'black']
+    styles = ['solid', 'dashed', 'dotted', 'dashdot']
+    for imbh, mbhv in enumerate(mbhvs['mbh_version']):
+        if(mbh_version is not None):
+            styles = ['solid']
+            if(mbh_version != mbhv):
+                continue
+
+        for ibolo, bolov in enumerate(bolovs['bolo_version']):
+            if(bolo_version is not None):
+                colors = ['black']
+                if(bolo_version != bolov):
+                    continue
+
+            for mass_ibin in np.arange(mass_nbins, dtype=np.int32):
+                if((bolo_version is not None) & (mbh_version is not None)):
+                   mass_binlist = '9.25,10.25,10.75,11.25,11.75'
+                   mass_bin_edges = np.array(mass_binlist.split(','), dtype=np.float32)
+                   label = r'${l} < \log_{x} M_\ast < {u}$'.format(l=mass_bin_edges[mass_ibin],
+                                                                   u=mass_bin_edges[mass_ibin + 1],
+                                                                   x='{10}')
+                else:
+                   label = '{m} {a} {b}'.format(m=mass_ibin, a=mbhv, b=bolov)
+
+                log_Fagn = np.zeros(ssfr_nbins, dtype=np.float32)
+                log_Fagn_err = np.zeros(ssfr_nbins, dtype=np.float32)
+                allbins = True
+                for ssfr_ibin in np.arange(ssfr_nbins, dtype=np.int32):
+                    if((mbhv, bolov, mass_ibin, ssfr_ibin) not in cf):
+                        allbins = False
+                        continue
+                    ccf = cf[mbhv, bolov, mass_ibin, ssfr_ibin]
+                    log_Fagn[ssfr_ibin] = ccf['log_Fagn'][1]
+                    log_Fagn_err[ssfr_ibin] = ccf['log_Fagn_err'][1]
+
+                if(allbins):
+                    offset = -1. + 2. * (imbh + len(mbhvs) * ibolo) / (len(mbhvs) * len(bolovs))
+                    offset = offset * 0.12
+                    color = colors[ibolo % len(styles)]
+                    style = styles[imbh % len(styles)]
+                    ax.plot(ssfr_bin_centers + offset, log_Fagn, linewidth=1 + mass_ibin, color=color, linestyle=style,
+                            label=label, alpha=0.7)
+                    ax.errorbar(ssfr_bin_centers + offset, log_Fagn, log_Fagn_err, color=color, linestyle='none', alpha=0.45)
+    
+    ax.legend(loc=2)
+    ax.set_ylabel(r'$\log_{10} F_{\rm AGN}(\lambda >\lambda_c)$')
+    ax.set_xlabel(r'$\log_{10} sSFR$')
+    ax.set_ylim([-3.7, 0.4])
+    ax.set_xlim([-15.1, -9.6])
+
+    pngbase = 'Fagn-vs-mssfr'
+    if(mbh_version is not None):
+        pngbase = pngbase + '-' + mbh_version
+    if(bolo_version is not None):
+        pngbase = pngbase + '-' + bolo_version
+    pngfile = pngbase + ".png"
+    plt.savefig(pngfile, dpi=300)
+    plt.close()

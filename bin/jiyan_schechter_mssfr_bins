@@ -1,0 +1,234 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import argparse
+import numpy as np
+import magn.schechter_likelihood
+import matplotlib.pyplot as plt
+import scipy.optimize
+import emcee
+import fitsio
+import scipy.integrate
+
+
+np.random.seed(102)
+
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(
+        prog=os.path.basename(sys.argv[0]),
+        description='Fit Schechter to full Jiyan sample')
+
+    parser.add_argument('-c', '--clobber', dest='clobber',
+                        action='store_true', default=False,
+                        help='Clobber emcee results')
+
+    parser.add_argument('-v', '--version', dest='version',
+                        type=str, default='0.3.2',
+                        help='MNSA configuration version')
+
+    parser.add_argument('-m', '--mass-bins', dest='mass_binlist',
+                        type=str, default='9.25,10.25,10.75,11.25,11.75',
+                        help='mass bin edges')
+
+    parser.add_argument('-s', '--ssfr-bins', dest='ssfr_binlist',
+                        type=str, default='-16.5,-13.0,-11.0,-9.5',
+                        help='ssfr bin edges')
+
+    parser.add_argument('-o', '--old', dest='dr17',
+                        required=False, help='dr17',
+                        action='store_true',
+                        default=False)
+
+    
+    args = parser.parse_args()
+    version = args.version
+    clobber = args.clobber
+    dr17 = args.dr17
+    mass_binlist = args.mass_binlist
+    ssfr_binlist = args.ssfr_binlist
+
+    ssfr_bin_edges = np.array(ssfr_binlist.split(','), dtype=np.float32)
+    ssfr_nbins = len(ssfr_bin_edges) - 1
+    ssfr_bin_centers = 0.5 * (ssfr_bin_edges[:-1] + ssfr_bin_edges[1:])
+
+    mass_bin_edges = np.array(mass_binlist.split(','), dtype=np.float32)
+    mass_nbins = len(mass_bin_edges) - 1
+    mass_bin_centers = 0.5 * (mass_bin_edges[:-1] + mass_bin_edges[1:])
+
+    pipe3d = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
+                                      '{v}', 'mnsa-{v}.fits').format(v=version),
+                         ext='PIPE3D')
+    log_ssfr = pipe3d['log_SFR_D_C'] - pipe3d['log_Mass']
+    log_mass = pipe3d['log_Mass']
+
+    agnfile = os.path.join(os.getenv('MNSA_DATA'),
+                           version + '.analysis', 'agn',
+                           'jiyan', 'jiyan-agn-{v}.fits')
+    if(dr17):
+        agnfile = agnfile.replace('agn-', 'agn-dr17-')
+    agnfile = agnfile.format(v=version)
+    agn = fitsio.read(agnfile)
+
+    paramsfile = os.path.join(os.getenv('MNSA_DATA'),
+                           version + '.analysis', 'agn',
+                           'jiyan', 'jiyan-agn-params-{v}.fits')
+    if(dr17):
+        paramsfile = paramsfile.replace('agn-', 'agn-dr17-')
+    paramsfile = paramsfile.format(v=version)
+    params = fitsio.read(paramsfile, ext='PARAMS')
+    mbhvs = fitsio.read(paramsfile, ext='MBH_VERSIONS')
+    bolovs = fitsio.read(paramsfile, ext='BOLO_VERSIONS')
+
+    good = (agn['good']) & (params['vdisp'] > 60.)
+
+    for imbh, mbhv in enumerate(mbhvs['mbh_version']):
+        for ibolo, bolov in enumerate(bolovs['bolo_version']):
+            for mass_ibin in np.arange(mass_nbins, dtype=np.int32):
+                for ssfr_ibin in np.arange(ssfr_nbins, dtype=np.int32):
+                    print("{m}-{b} Mass bin {j} SSFR bin {i}".format(j=mass_ibin, i=ssfr_ibin, m=mbhv, b=bolov), flush=True)
+
+                    inbin = ((log_ssfr > ssfr_bin_edges[ssfr_ibin]) &
+                             (log_ssfr <= ssfr_bin_edges[ssfr_ibin + 1]) &
+                             (log_mass > mass_bin_edges[mass_ibin]) &
+                             (log_mass <= mass_bin_edges[mass_ibin + 1]) &
+                             good)
+                    
+                    isagn = agn['isagn'][inbin]
+                    iagn = np.where(isagn == True)[0]
+                    ithreshold = np.where(isagn == False)[0]
+
+                    print(len(iagn))
+                    print(len(ithreshold))
+                    
+                    log_mbh = params['logmbh'][inbin, imbh]
+                    log_ledd = params['logledd'][inbin, imbh]
+                    
+                    log_bolo = params['logbolo'][inbin, ibolo]
+                    log_bolo_threshold = params['logbolo_threshold'][inbin, ibolo]
+                    
+                    log_lambdas = log_bolo[iagn] - log_ledd[iagn]
+                    log_lambda_limits = log_bolo_threshold[ithreshold] - log_ledd[ithreshold]
+                    
+                    properties = np.ones(len(log_lambdas), dtype=np.float32)
+                    properties_limits = np.ones(len(log_lambda_limits), dtype=np.float32)
+                    
+                    print("Make grid", flush=True)
+                    
+                    # Make a grid of the neg log like
+                    beta = 0.
+                    log_lambda_star = 0.
+                    
+                    nn = 40
+                    alpha_grid = 0.5 + (2.5 - 0.5) * np.arange(nn) / np.float32(nn - 1)
+                    dalpha = alpha_grid[1] - alpha_grid[0]
+                    bottom = alpha_grid[0] - 0.5 * dalpha
+                    top = alpha_grid[-1] + 0.5 * dalpha
+                    llm_grid = (-8.) + ((-4.) - (-8.)) * np.arange(nn) / np.float32(nn - 1)
+                    dllm = llm_grid[1] - llm_grid[0]
+                    left = llm_grid[0] - 0.5 * dllm
+                    right = llm_grid[-1] + 0.5 * dllm
+                    
+                    # Create likelihood object
+                    log_lambda_min_range = np.array([-10.,
+                                                     np.min(np.append(log_lambdas, log_lambda_limits)) - 0.01])
+                    schlike = magn.schechter_likelihood.SchechterLikelihood(log_lambdas=log_lambdas,
+                                                                            log_lambda_limits=log_lambda_limits,
+                                                                            properties=properties,
+                                                                            properties_limits=properties_limits,
+                                                                            log_lambda_min_range=log_lambda_min_range)
+                    
+                    nll = np.zeros((len(alpha_grid), len(llm_grid)), dtype=np.float32)
+                    fabove = np.zeros((len(alpha_grid), len(llm_grid)), dtype=np.float32)
+                    for i, alpha in enumerate(alpha_grid):
+                        for j, log_lambda_min in enumerate(llm_grid):
+                            theta = [alpha, log_lambda_star, log_lambda_min]
+                            fabove[i, j] = magn.schechter_likelihood.Fabove(alpha=alpha, log_lambda_star=log_lambda_star,
+                                                                            log_lambda_min=log_lambda_min, log_lambda_max=1.,
+                                                                            log_lambda_c=-2.5)
+                            nll[i, j] = - schlike(theta)
+            
+                    ii = np.where(np.abs(nll) < 1e+10)
+                    nll_min = np.nanmin(nll[ii])
+                    plt.imshow(nll - nll_min, vmin=0., vmax=100, extent=[left, right, bottom, top],
+                               cmap='Greys_r', origin='lower')
+                    plt.colorbar(label='delta negative log likelihood')
+                    CS = plt.contour(np.log10(fabove), extent=[left, right, bottom, top], origin='lower',
+                                     levels=-4. + np.arange(30) * 0.3)
+                    plt.clabel(CS, CS.levels, inline=True, fontsize=10)
+
+                    plt.xlabel('log10 lambda_min')
+                    plt.ylabel('alpha')
+                    filename = 'jiyan-schechter-grid-{m}-{b}-mass{j}-ssfr{i}-{v}.png'.format(m=mbhv, b=bolov, v=version, i=ssfr_ibin, j=mass_ibin)
+                    plt.savefig(filename, dpi=300)
+                    plt.close()
+
+                    emcee_filename = 'jiyan-schechter-emcee-{m}-{b}-mass{j}-ssfr{i}-{v}.fits'.format(m=mbhv, b=bolov, v=version, i=ssfr_ibin, j=mass_ibin)
+
+                    if((clobber is False) & (os.path.exists(emcee_filename))):
+                        print("Emcee output exists already, skipping!", flush=True)
+                        continue
+
+                    # Now run emcee
+                    nwalkers = 16
+                    ndim = 3
+                    log_lambda_star_st = -0.5 + np.random.normal() * 0.2
+                    alpha_st = 1.5 + np.random.normal() * 0.2
+                    log_lambda_min_st = log_lambda_min_range[1] - 2. + np.random.normal() * 0.2
+                    theta_st = np.array([alpha_st, log_lambda_star_st, log_lambda_min_st])
+                    theta_0 = (np.outer(np.ones(nwalkers), theta_st) +
+                               np.random.normal(size=(nwalkers, ndim)) * 0.2)
+                    itoohigh = np.where(theta_0[:, 2] > log_lambda_min_range[1])[0]
+                    theta_0[itoohigh, 2] = log_lambda_min_range[1] - 0.1
+                    schlike.sign = 1.  # maximize
+                    sampler = emcee.EnsembleSampler(nwalkers, ndim, schlike)
+                    print("emcee Burn-in", flush=True)
+                    state = sampler.run_mcmc(theta_0, 100)
+                    sampler.reset()
+                    print("emcee Run", flush=True)
+                    sampler.run_mcmc(state, 10000)
+                    try:
+                        print("Mean acceptance fraction: {0:.3f}".format(np.mean(sampler.acceptance_fraction)), flush=True)
+                        print("Mean autocorrelation time: {0:.3f}".format(np.mean(sampler.get_autocorr_time())), flush=True)
+                    except:
+                        sampler.run_mcmc(state, 20000)
+                        print("Mean acceptance fraction: {0:.3f}".format(np.mean(sampler.acceptance_fraction)), flush=True)
+                        print("Mean autocorrelation time: {0:.3f}".format(np.mean(sampler.get_autocorr_time())), flush=True)
+
+                    chain_vals = sampler.get_chain(flat=True)
+
+                    fit_dtype = np.dtype([('alpha', np.float32),
+                                          ('log_lambda_star', np.float32),
+                                          ('log_lambda_min', np.float32),
+                                          ('Fagn_2_0', np.float32),
+                                          ('Fagn_2_5', np.float32),
+                                          ('Fagn_3_0', np.float32),
+                                          ('Fagn_3_5', np.float32)])
+                    chain = np.zeros(chain_vals.shape[0], dtype=fit_dtype)
+                    
+                    for i in np.arange(len(chain), dtype=np.int32):
+                        if((i % 1000) == 0):
+                            print(i, flush=True)
+                        chain['alpha'][i] = chain_vals[i, 0]
+                        chain['log_lambda_star'][i] = chain_vals[i, 1]
+                        chain['log_lambda_min'][i] = chain_vals[i, 2]
+                        chain['Fagn_2_0'][i] = magn.schechter_likelihood.Fabove(alpha=chain['alpha'][i],
+                                                                                log_lambda_star=chain['log_lambda_star'][i],
+                                                                                log_lambda_min=chain['log_lambda_min'][i],
+                                                                                log_lambda_c=-2.0)
+                        chain['Fagn_2_5'][i] = magn.schechter_likelihood.Fabove(alpha=chain['alpha'][i],
+                                                                                log_lambda_star=chain['log_lambda_star'][i],
+                                                                                log_lambda_min=chain['log_lambda_min'][i],
+                                                                                log_lambda_c=-2.5)
+                        chain['Fagn_3_0'][i] = magn.schechter_likelihood.Fabove(alpha=chain['alpha'][i],
+                                                                                log_lambda_star=chain['log_lambda_star'][i],
+                                                                                log_lambda_min=chain['log_lambda_min'][i],
+                                                                                log_lambda_c=-3.0)
+                        chain['Fagn_3_5'][i] = magn.schechter_likelihood.Fabove(alpha=chain['alpha'][i],
+                                                                                log_lambda_star=chain['log_lambda_star'][i],
+                                                                                log_lambda_min=chain['log_lambda_min'][i],
+                                                                                log_lambda_c=-3.5)
+                        
+                    fitsio.write(emcee_filename, chain, clobber=True)

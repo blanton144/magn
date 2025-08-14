@@ -1,0 +1,137 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import argparse
+import subprocess
+import numpy as np
+import magn.schechter_likelihood
+import magn.defaults
+import matplotlib
+import matplotlib.pyplot as plt
+import scipy.optimize
+import emcee
+import fitsio
+import scipy.integrate
+
+
+matplotlib.rcParams['figure.figsize'] = [10., 5.5]
+matplotlib.rcParams['font.size'] = 20
+matplotlib.rcParams['text.usetex'] = True
+
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(
+        prog=os.path.basename(sys.argv[0]),
+        description='Plot emcee results')
+
+    parser.add_argument('-v', '--version', dest='version',
+                        type=str, default='0.3.2',
+                        help='MNSA configuration version')
+
+    parser.add_argument('-o', '--old', dest='dr17',
+                        required=False, help='dr17',
+                        action='store_true',
+                        default=False)
+
+    parser.add_argument('-m', '--mass-bins', dest='mass_binlist',
+                        type=str, default=magn.defaults.mass_bin_edges,
+                        help='mass bin edges')
+
+    parser.add_argument('-s', '--ssfr-bins', dest='ssfr_binlist',
+                        type=str, default=magn.defaults.ssfr_bin_edges,
+                        help='ssfr bin edges')
+
+    parser.add_argument('-t', '--test', dest='test',
+                        type=str, default=None, required=False,
+                        help='test name')
+
+    parser.add_argument('-A', '--alt-name', dest='altname',
+                        type=str, default='',
+                        help='alternative dir postfix')
+
+    
+    args = parser.parse_args()
+    version = args.version
+    dr17 = args.dr17
+    test = args.test
+    mass_binlist = args.mass_binlist
+    ssfr_binlist = args.ssfr_binlist
+    altname = args.altname
+
+    ssfr_bin_edges = np.array(ssfr_binlist.split(','), dtype=np.float32)
+    ssfr_nbins = len(ssfr_bin_edges) - 1
+    ssfr_bin_centers = 0.5 * (ssfr_bin_edges[:-1] + ssfr_bin_edges[1:])
+
+    mass_bin_edges = np.array(mass_binlist.split(','), dtype=np.float32)
+    mass_nbins = len(mass_bin_edges) - 1
+    mass_bin_centers = 0.5 * (mass_bin_edges[:-1] + mass_bin_edges[1:])
+
+    agndir = os.path.join(os.getenv('MNSA_DATA'), version + '.analysis', 'agn', 'jiyan' + altname)
+
+    summary = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
+                                       '{v}', 'mnsa-{v}.fits').format(v=version),
+                          ext='SUMMARY')
+
+    pipe3d = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
+                                      '{v}', 'mnsa-{v}.fits').format(v=version),
+                         ext='PIPE3D')
+    log_ssfr = pipe3d['log_SFR_D_C'] - pipe3d['log_Mass']
+    log_mass = pipe3d['log_Mass']
+
+    agndir = os.path.join(os.getenv('MNSA_DATA'), version + '.analysis', 'agn', 'jiyan' + altname)
+    agnfile = os.path.join(agndir, 'jiyan-agn-{v}.fits')
+    if(dr17):
+        agnfile = agnfile.replace('agn-', 'agn-dr17-')
+    if(test):
+        agnfile = agnfile.replace('jiyan-agn', 'jiyan-agn-{t}'.format(t=test))
+    agnfile = agnfile.format(v=version)
+    agn = fitsio.read(agnfile)
+
+    good = (agn['good'] > 0)
+    isagn = (agn['isagn'] > 0)
+    mainbits = (2**10 | 2**11 | 2**12)
+    ismain = (((summary['mngtarg1'] & mainbits) != 0) &
+              (summary['esrweight'] > 0.))
+
+    iagn = np.where(good & isagn & ismain)[0]
+    ithreshold = np.where(good & (isagn == False) & ismain)[0]
+
+    fig, ax = plt.subplots()
+
+    ax.scatter(log_mass[ithreshold], log_ssfr[ithreshold], color='black', alpha=0.4, s=7,
+               label=r'${\rm AGN~upper~limits}$')
+    ax.scatter(log_mass[iagn], log_ssfr[iagn], color='red', alpha=0.8, s=35,
+               label=r'${\rm AGN~detections}$')
+
+    for issfr in np.arange(len(ssfr_bin_edges)):
+        ax.plot([mass_bin_edges[0], mass_bin_edges[-1]],
+                [ssfr_bin_edges[issfr], ssfr_bin_edges[issfr]],
+                linewidth=2, color='grey')
+
+    for imass in np.arange(len(mass_bin_edges)):
+        ax.plot([mass_bin_edges[imass], mass_bin_edges[imass]],
+                [ssfr_bin_edges[0], ssfr_bin_edges[-1]],
+                linewidth=2, color='grey')
+
+    ax.set_ylabel(r'${\rm log}_{10} {\rm ~sSFR} ~/ {\rm ~yr}^{-1}$')
+    ax.set_xlabel(r'${\rm log}_{10} M_\ast / M_\odot$')
+
+    ax.set_ylim([-16.2, -9.1])
+    ax.set_xlim([8.7, 12.1])
+
+    ax.legend(loc='lower left')
+
+    plt.tight_layout()
+   
+    pngname = 'jiyan-mssfr-{v}.png'.format(v=version)
+    if(dr17):
+        pngname = pngname.replace('jiyan-mssfr-', 'jiyan-mssfr-dr17-')
+    if(test):
+        pngname = pngname.replace('jiyan-mssfr', 'jiyan-{t}-mssfr'.format(t=test))
+    plt.savefig(os.path.join(agndir, pngname), dpi=300)
+    plt.close()
+
+    subprocess.run(['convert', os.path.join(agndir, pngname), '-trim',
+                    os.path.join(agndir, pngname)])

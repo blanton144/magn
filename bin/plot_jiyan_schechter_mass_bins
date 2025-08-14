@@ -1,0 +1,126 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import argparse
+import numpy as np
+import matplotlib.pyplot as plt
+import fitsio
+
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(
+        prog=os.path.basename(sys.argv[0]),
+        description='Fit Schechter to full Jiyan sample')
+
+    parser.add_argument('-v', '--version', dest='version',
+                        type=str, default='0.3.2',
+                        help='MNSA configuration version')
+
+    parser.add_argument('-o', '--old', dest='dr17',
+                        required=False, help='dr17',
+                        action='store_true',
+                        default=False)
+
+    parser.add_argument('-b', '--bins', dest='binlist',
+                        type=str, default='9.25,10.25,10.75,11.25,11.75',
+                        help='bin edges')
+    
+    args = parser.parse_args()
+    version = args.version
+    dr17 = args.dr17
+    binlist = args.binlist
+
+    bin_edges = np.array(binlist.split(','), dtype=np.float32)
+    nbins = len(bin_edges) - 1
+    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+
+    paramsfile = os.path.join(os.getenv('MNSA_DATA'),
+                           version + '.analysis', 'agn',
+                           'jiyan', 'jiyan-agn-params-{v}.fits')
+    if(dr17):
+        paramsfile = paramsfile.replace('agn-', 'agn-dr17-')
+    paramsfile = paramsfile.format(v=version)
+    mbhvs = fitsio.read(paramsfile, ext='MBH_VERSIONS')
+    bolovs = fitsio.read(paramsfile, ext='BOLO_VERSIONS')
+
+    cf = dict()
+    for imbh, mbhv in enumerate(mbhvs['mbh_version']):
+        for ibolo, bolov in enumerate(bolovs['bolo_version']):
+            for ibin in np.arange(nbins, dtype=np.int32):
+                filename = 'jiyan-schechter-emcee-{m}-{b}-mass{i}-{v}.fits'.format(m=mbhv, b=bolov, v=version, i=ibin)
+                if(os.path.exists(filename) is False):
+                    continue
+                chain = fitsio.read(filename)
+                cf[mbhv, bolov, ibin] = dict()
+                cf[mbhv, bolov, ibin]['log_lambda_c'] = np.array([-3.5, -3.0, -2.5, -2.0], dtype=np.float32)
+                cf[mbhv, bolov, ibin]['log_Fagn'] = np.zeros(4, dtype=np.float32)
+                cf[mbhv, bolov, ibin]['log_Fagn_err'] = np.zeros(4, dtype=np.float32)
+                cf[mbhv, bolov, ibin]['log_Fagn'][0] = np.log10(chain['Fagn_3_5']).mean()
+                cf[mbhv, bolov, ibin]['log_Fagn_err'][0] = np.log10(chain['Fagn_3_5']).std()
+                cf[mbhv, bolov, ibin]['log_Fagn'][1] = np.log10(chain['Fagn_3_0']).mean()
+                cf[mbhv, bolov, ibin]['log_Fagn_err'][1] = np.log10(chain['Fagn_3_0']).std()
+                cf[mbhv, bolov, ibin]['log_Fagn'][2] = np.log10(chain['Fagn_2_5']).mean()
+                cf[mbhv, bolov, ibin]['log_Fagn_err'][2] = np.log10(chain['Fagn_2_5']).std()
+                cf[mbhv, bolov, ibin]['log_Fagn'][3] = np.log10(chain['Fagn_2_0']).mean()
+                cf[mbhv, bolov, ibin]['log_Fagn_err'][3] = np.log10(chain['Fagn_2_0']).std()
+
+    fig, ax = plt.subplots()
+    
+    colors = ['red', 'green', 'blue', 'black']
+    styles = ['solid', 'dashed', 'dotted', 'dashdot']
+    for imbh, mbhv in enumerate(mbhvs['mbh_version']):
+        for ibolo, bolov in enumerate(bolovs['bolo_version']):
+            for ibin in np.arange(nbins, dtype=np.int32):
+                if((mbhv, bolov, ibin) not in cf):
+                    continue
+                ccf = cf[mbhv, bolov, ibin]
+                color = colors[ibolo]
+                style = styles[imbh]
+                ax.plot(ccf['log_lambda_c'], ccf['log_Fagn'], linewidth=2 + ibin,
+                        color=color, linestyle=style,
+                        label='{a} {b}'.format(a=mbhv, b=bolov))
+                ax.errorbar(ccf['log_lambda_c'], ccf['log_Fagn'], ccf['log_Fagn_err'], color=color, linestyle='none')
+
+    ax.legend(fontsize=6)
+    ax.set_ylabel(r'log$_{10} F_{\rm AGN}(\lambda >\lambda_c)$')
+    ax.set_xlabel(r'log$_{10} \lambda_c$')
+    ax.set_xlim([-3.8, -1.])
+
+    plt.savefig('Fagn-massbins.png', dpi=300)
+    plt.close()
+
+    fig, ax = plt.subplots()
+
+    colors = ['red', 'green', 'blue', 'black']
+    styles = ['solid', 'dashed', 'dotted', 'dashdot']
+    for imbh, mbhv in enumerate(mbhvs['mbh_version']):
+        for ibolo, bolov in enumerate(bolovs['bolo_version']):
+            log_Fagn = np.zeros(nbins, dtype=np.float32)
+            log_Fagn_err = np.zeros(nbins, dtype=np.float32)
+            allbins = True
+            for ibin in np.arange(nbins, dtype=np.int32):
+                if((mbhv, bolov, ibin) not in cf):
+                    allbins = False
+                    continue
+                ccf = cf[mbhv, bolov, ibin]
+                log_Fagn[ibin] = ccf['log_Fagn'][3]
+                log_Fagn_err[ibin] = ccf['log_Fagn_err'][3]
+
+            if(allbins):
+                offset = -1. + 2. * (imbh + len(mbhvs) * ibolo) / (len(mbhvs) * len(bolovs))
+                offset = offset * 0.12
+                color = colors[ibolo]
+                style = styles[imbh]
+                ax.plot(bin_centers + offset, log_Fagn, linewidth=2, color=color, linestyle=style,
+                        label='{a} {b}'.format(a=mbhv, b=bolov), alpha=0.6)
+                ax.errorbar(bin_centers + offset, log_Fagn, log_Fagn_err, color=color, linestyle='none', alpha=0.45)
+    
+    ax.legend(fontsize=6)
+    ax.set_ylabel(r'log$_{10} F_{\rm AGN}(\lambda >\lambda_c)$')
+    ax.set_xlabel(r'log$_{10} M_\ast$')
+    ax.set_xlim([8.6, 11.6])
+
+    plt.savefig('Fagn-vs-mass.png', dpi=300)
+    plt.close()

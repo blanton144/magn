@@ -1,0 +1,123 @@
+#!/usr/bin/env python
+# encoding: utf-8
+
+
+import os
+import sys
+import argparse
+import matplotlib.pyplot as plt
+import fitsio
+import numpy as np
+import mnsa
+import magn.agn
+import magn.defaults
+
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(
+        prog=os.path.basename(sys.argv[0]),
+        description='Select Ji and Yan-style AGN.')
+
+    parser.add_argument('-v', '--version', dest='version',
+                        type=str, default='0.3.2',
+                        help='MNSA configuration version')
+
+    parser.add_argument('-o', '--old', dest='dr17',
+                        required=False, help='dr17',
+                        action='store_true',
+                        default=False)
+
+    parser.add_argument('-t', '--test', dest='test',
+                        type=str, default=None, required=False,
+                        help='test name')
+
+    parser.add_argument('-A', '--alt-name', dest='altname',
+                        type=str, default='',
+                        help='alternative dir postfix')
+
+    args = parser.parse_args()
+    version = args.version
+    dr17 = args.dr17
+    test = args.test
+    altname = args.altname
+
+    agnfile = os.path.join(os.getenv('MNSA_DATA'),
+                           version + '.analysis', 'agn',
+                           'jiyan' + altname, 'jiyan-agn-{v}.fits')
+    if(dr17):
+        agnfile = agnfile.replace('agn-', 'agn-dr17-')
+    if(test):
+        agnfile = agnfile.replace('agn-', 'agn-{t}-'.format(t=test))
+    agnfile = agnfile.format(v=version)
+    agn = fitsio.read(agnfile)
+
+    mbh_versions = ['gultekin09', 'kormendy13', 'graham13', 'greene06']
+    bolo_versions = ['pennell17_nodust_o3', 'heckman04_nodust_o3',
+                     'heckman04_dust_o3', 'netzer19_dust_hb']
+
+    summary_file = os.path.join(os.getenv('MNSA_DATA'), '{v}', 'mnsa-{v}.fits').format(v=version)
+    dap = fitsio.read(summary_file, ext='DAPALL')
+
+    logmbhs = np.zeros((len(agn), len(mbh_versions)), dtype=np.float32) - 9999.
+    logledd = np.zeros((len(agn), len(mbh_versions)), dtype=np.float32) - 9999.
+    logbolo = np.zeros((len(agn), len(bolo_versions)), dtype=np.float32) - 9999.
+    logbolo_threshold = np.zeros((len(agn), len(bolo_versions)), dtype=np.float32) - 9999.
+    
+    # Black hole masses + Eddington luminosities
+    vdisp = dap['STELLAR_SIGMA_1RE']
+    ok = (vdisp > magn.defaults.vdisp_low)
+    for i, mbh_version in enumerate(mbh_versions):
+        logmbhs[ok, i] = magn.agn.vdisp_to_logmbh(vdisp=vdisp[ok], version=mbh_version)
+        logledd[ok, i] = magn.agn.logmbh_to_logledd(logmbh=logmbhs[ok, i])
+
+    # Bolometric luminosities and threshold
+    ok = (agn['log_luminosity_o3'] > 0.)
+    ok_threshold = (agn['log_luminosity_o3_threshold'] > 0.)
+    for i, bolo_version in enumerate(bolo_versions):
+        if('_nodust' in bolo_version):
+            corr = ''
+        else:
+            corr = '_corr'
+
+        x = bolo_version[-2:]
+
+        n = 'log_luminosity_{x}{c}'.format(x=x, c=corr)
+        print(n)
+        logbolo[ok, i] = magn.agn.loglum_to_logbolo(loglum=agn[n][ok],
+                                                    version=bolo_version)
+
+        n = 'log_luminosity_{x}{c}_threshold'.format(x=x, c=corr)
+        logbolo_threshold[ok_threshold, i] = magn.agn.loglum_to_logbolo(loglum=agn[n][ok_threshold],
+                                                                version=bolo_version)
+
+    params_dtype = np.dtype([('plateifu', str, 20),
+                             ('vdisp', np.float32),
+                             ('logmbh', np.float32, len(mbh_versions)),
+                             ('logledd', np.float32, len(mbh_versions)),
+                             ('logbolo', np.float32, len(bolo_versions)),
+                             ('logbolo_threshold', np.float32, len(bolo_versions))])
+    params = np.zeros(len(agn), dtype=params_dtype)
+    params['plateifu'] = agn['plateifu']
+    params['vdisp'] = vdisp
+    params['logmbh'] = logmbhs
+    params['logledd'] = logledd
+    params['logbolo'] = logbolo
+    params['logbolo_threshold'] = logbolo_threshold
+
+    parfile = os.path.join(os.getenv('MNSA_DATA'),
+                           version + '.analysis', 'agn',
+                           'jiyan' + altname, 'jiyan-agn-params-{v}.fits').format(v=version)
+    if(dr17):
+        parfile = parfile.replace('agn-', 'agn-dr17-')
+    if(test is not None):
+        parfile = parfile.replace('agn-', 'agn-{t}-'.format(t=test))
+    fitsio.write(parfile, params, extname='PARAMS', clobber=True)
+    mbh_dtype = np.dtype([('mbh_version', str, 100)])
+    mbh_arr = np.zeros(len(mbh_versions), dtype=mbh_dtype)
+    mbh_arr['mbh_version'] = mbh_versions
+    bolo_dtype = np.dtype([('bolo_version', str, 100)])
+    bolo_arr = np.zeros(len(bolo_versions), dtype=bolo_dtype)
+    bolo_arr['bolo_version'] = bolo_versions
+    fitsio.write(parfile, mbh_arr, extname='MBH_VERSIONS', clobber=False)
+    fitsio.write(parfile, bolo_arr, extname='BOLO_VERSIONS', clobber=False)

@@ -1,0 +1,322 @@
+#!/usr/bin/env python
+# encoding: utf-8
+
+
+import os
+import sys
+import subprocess
+import argparse
+import matplotlib.pyplot as plt
+import matplotlib.patches
+import matplotlib
+import fitsio
+import numpy as np
+import mnsa
+import magn
+import magn.jiyan
+import magn.defaults
+import magn.agn
+import mnsa.mnsautils
+
+matplotlib.rcParams['font.size'] = 18
+matplotlib.rcParams['figure.figsize'] = [12., 12.]
+matplotlib.rcParams['text.usetex'] = True
+
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(
+        prog=os.path.basename(sys.argv[0]),
+        description='Select Ji and Yan-style AGN.')
+
+    parser.add_argument('-v', '--version', dest='version',
+                        type=str, default='0.3.2',
+                        help='MNSA configuration version')
+
+    parser.add_argument('-o', '--old', dest='dr17',
+                        required=False, help='dr17',
+                        action='store_true',
+                        default=False)
+
+    parser.add_argument('-t', '--test', dest='test',
+                        type=str, default=None, required=False,
+                        help='test name')
+
+    parser.add_argument('-A', '--alt-name', dest='altname',
+                        type=str, default='',
+                        help='alternative dir postfix')
+
+    args = parser.parse_args()
+    version = args.version
+    dr17 = args.dr17
+    test = args.test
+    altname = args.altname
+
+    print("Reading data", flush=True)
+
+    summary = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
+                                       '{v}', 'mnsa-{v}.fits').format(v=version),
+                          ext='SUMMARY')
+    pipe3d = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
+                                      '{v}', 'mnsa-{v}.fits').format(v=version),
+                         ext='PIPE3D')
+
+    agnfile = os.path.join(os.getenv('MNSA_DATA'),
+                           version + '.analysis', 'agn',
+                           'jiyan' + altname, 'jiyan-agn-{v}.fits')
+    if(dr17):
+        agnfile = agnfile.replace('agn-', 'agn-dr17-')
+    if(test is not None):
+        agnfile = agnfile.replace('agn-', 'agn-{t}-'.format(t=test))
+    agnfile = agnfile.format(v=version)
+    agn = fitsio.read(agnfile)
+
+    paramsfile = os.path.join(os.getenv('MNSA_DATA'),
+                           version + '.analysis', 'agn',
+                           'jiyan' + altname, 'jiyan-agn-params-{v}.fits')
+    if(dr17):
+        paramsfile = paramsfile.replace('agn-', 'agn-dr17-')
+    if(test is not None):
+        paramsfile = paramsfile.replace('agn-', 'agn-{t}-'.format(t=test))
+    paramsfile = paramsfile.format(v=version)
+    params = fitsio.read(paramsfile, ext='PARAMS')
+    mbhvs = fitsio.read(paramsfile, ext='MBH_VERSIONS')
+    bolovs = fitsio.read(paramsfile, ext='BOLO_VERSIONS')
+
+    good = (agn['good']) & (params['vdisp'] > magn.defaults.vdisp_low)
+                
+    log_sfr = pipe3d['log_SFR_ssp'][good]
+    log_mass = pipe3d['log_Mass'][good]
+    log_ssfr = log_sfr - log_mass
+    log_vdisp = np.log10(params['vdisp'][good])
+    log_hb_corr_threshold = agn['log_luminosity_hb_corr_threshold'][good]
+    log_hb_corr = agn['log_luminosity_hb_corr'][good]
+    log_o3_threshold = agn['log_luminosity_o3_threshold'][good]
+    log_o3 = agn['log_luminosity_o3'][good]
+    log_o3_corr_threshold = agn['log_luminosity_o3_corr_threshold'][good]
+    log_o3_corr = agn['log_luminosity_o3_corr'][good]
+    log_hb_threshold = agn['log_luminosity_hb_threshold'][good]
+    log_hb = agn['log_luminosity_hb'][good]
+
+    isagn = agn['isagn'][good]
+    iagn = np.where(isagn == True)[0]
+    ithreshold = np.where(isagn == False)[0]
+
+    print("Median OIII (uncorrected) luminosity: {m:5.2f}".format(m=np.median(log_o3[iagn])))
+    print("Median Hb (corrected) luminosity: {m:5.2f}".format(m=np.median(log_hb_corr[iagn])))
+
+    nabove = np.float32((log_hb_corr_threshold[ithreshold] < np.median(log_hb_corr[iagn])).sum())
+    nall = np.float32(len(ithreshold))
+    fabove = nabove / nall
+    print("Fraction of Hb (corrected) thresholds below median: {m:5.2f}".format(m=fabove))
+
+    for ltype in ['lo3', 'lo3corr', 'lhb', 'lhbcorr']:
+    
+        fig, ax = plt.subplots(2, 2)
+
+        if(ltype == 'lo3'):
+            ylabel = r'$\log_{10} L({\rm [O~III]}) / {\rm ~ergs~s}^{-1}$'
+            log_lum = log_o3
+            log_lum_threshold = log_o3_threshold
+        elif(ltype == 'lhbcorr'):
+            ylabel = r'$\log_{10} L({\rm H}\beta)_{\rm corr} / {\rm ~ergs~s}^{-1}$'
+            log_lum = log_hb_corr
+            log_lum_threshold = log_hb_corr_threshold
+        elif(ltype == 'lo3corr'):
+            ylabel = r'$\log_{10} L({\rm [O~III]})_{\rm corr} / {\rm ~ergs~s}^{-1}$'
+            log_lum = log_o3_corr
+            log_lum_threshold = log_o3_corr_threshold
+        elif(ltype == 'lhb'):
+            ylabel = r'$\log_{10} L({\rm H}\beta) / {\rm ~ergs~s}^{-1}$'
+            log_lum = log_hb
+            log_lum_threshold = log_hb_threshold
+        else:
+            raise ValueError("No ltype {l}".format(l=ltype))
+
+        ylim = [37., 43.]
+
+        ax[0, 0].errorbar(log_mass[ithreshold],
+                          log_lum_threshold[ithreshold],
+                          yerr=np.ones(len(ithreshold)) * 0.3,
+                          uplims=np.ones(len(ithreshold)),
+                          xerr=0.04, linestyle='none', marker='.', markersize=1, alpha=0.15,
+                          linewidth=1, color='black', zorder=1,
+                          label=r'{\rm AGN Detection Thresholds}')
+            
+        ax[0, 0].scatter(log_mass[iagn],
+                         log_lum[iagn],
+                         alpha=1.0, color='red', s=40,
+                         zorder=2, label=r'{\rm AGN Detections}')
+        ax[0, 0].set_xlabel(r'$\log_{10} {\rm~Stellar~Mass~(}M_\odot{\rm )}$')
+        ax[0, 0].set_ylabel(ylabel)
+    
+        ax[0, 0].set_xlim([8.9, 12.5])
+        ax[0, 0].set_ylim(ylim)
+    
+        ax[0, 1].errorbar(log_vdisp[ithreshold],
+                          log_lum_threshold[ithreshold],
+                          yerr=np.ones(len(ithreshold)) * 0.3,
+                          uplims=np.ones(len(ithreshold)),
+                          xerr=0.04, linestyle='none', marker='.', markersize=1, alpha=0.15,
+                          linewidth=1, color='black', zorder=1,
+                          label=r'{\rm AGN Detection Thresholds}')
+    
+        ax[0, 1].scatter(log_vdisp[iagn],
+                         log_lum[iagn],
+                         alpha=1.0, color='red', s=40,
+                         zorder=2, label=r'{\rm AGN Detections}')
+        ax[0, 1].set_xlabel(r'$\log_{10} \sigma_v {\rm (km~s}^{-1}{\rm )}$')
+        ax[0, 1].set_ylabel(ylabel)
+        
+        ax[0, 1].set_xlim([1.7, 2.8])
+        ax[0, 1].set_ylim(ylim)
+    
+        ax[1, 0].errorbar(log_sfr[ithreshold],
+                          log_lum_threshold[ithreshold],
+                          yerr=np.ones(len(ithreshold)) * 0.3,
+                          uplims=np.ones(len(ithreshold)),
+                          xerr=0.04, linestyle='none', marker='.', markersize=1, alpha=0.15,
+                          linewidth=1, color='black', zorder=1,
+                          label=r'{\rm AGN Detection Thresholds}')
+    
+        ax[1, 0].scatter(log_sfr[iagn],
+                         log_lum[iagn],
+                         alpha=1.0, color='red', s=40,
+                         zorder=2, label=r'{\rm AGN Detections}')
+        ax[1, 0].set_xlabel(r'$\log_{10} {\rm~SFR~(}M_\odot{\rm ~yr}^{-1}{\rm )}$')
+        ax[1, 0].set_ylabel(ylabel)
+        
+        ax[1, 0].set_xlim([-2., 1.9])
+        ax[1, 0].set_ylim(ylim)
+        
+        ax[1, 1].errorbar(log_ssfr[ithreshold],
+                          log_lum_threshold[ithreshold],
+                          yerr=np.ones(len(ithreshold)) * 0.3,
+                          uplims=np.ones(len(ithreshold)),
+                          xerr=0.04, linestyle='none', marker='.', markersize=1, alpha=0.15,
+                          linewidth=1, color='black', zorder=1,
+                          label=r'{\rm AGN Detection Thresholds}')
+        
+        ax[1, 1].scatter(log_ssfr[iagn],
+                         log_lum[iagn],
+                         alpha=1.0, color='red', s=40,
+                         zorder=2, label=r'{\rm AGN Detections}')
+        ax[1, 1].set_xlabel(r'$\log_{10} {\rm~sSFR~(yr}^{-1}{\rm )}$')
+        ax[1, 1].set_ylabel(ylabel)
+        
+        ax[1, 1].set_xlim([-13.8, -9.3])
+        ax[1, 1].set_ylim(ylim)
+        
+        ax[1, 1].legend()
+        
+        plt.tight_layout()
+    
+        pngfile = os.path.join(os.getenv('MNSA_DATA'),
+                               version + '.analysis', 'agn',
+                               'jiyan' + altname, 'jiyan-thresholds-ssfr-{l}-{v}.png')
+        if(dr17):
+            pngfile = pngfile.replace('jiyan-thresholds-', 'jiyan-thresholds-dr17-')
+        if(test is not None):
+            pngfile = pngfile.replace('jiyan-thresholds', 'jiyan-thresholds-{t}'.format(t=test))
+        pngfile = pngfile.format(v=version, l=ltype)
+        plt.savefig(pngfile, dpi=150)
+        subprocess.run(['convert', pngfile, '-trim', pngfile])
+
+    for imbh, mbhv in enumerate(mbhvs['mbh_version']):
+        for ibolo, bolov in enumerate(bolovs['bolo_version']):
+
+            if(bolov[-2:] == 'hb'):
+                ylabel = r'$\log_{10} \lambda~{\rm (H}\beta{\rm -based)}$'
+            elif(bolov[-2:] == 'o3'):
+                ylabel = r'$\log_{10} \lambda~{\rm ([O}{\textsc{III}}{\rm ]-based)}$'
+            else:
+                raise ValueError("BOLO_VERSION not supported: {b}".format(b=bolov))
+
+            log_mbh = params['logmbh'][good, imbh]
+            log_ledd = params['logledd'][good, imbh]
+    
+            log_bolo = params['logbolo'][good, ibolo]
+            log_bolo_threshold = params['logbolo_threshold'][good, ibolo]
+
+            log_eddrat = log_bolo - log_ledd
+            log_eddrat_threshold = log_bolo_threshold - log_ledd
+
+            print("Plotting", flush=True)
+
+            fig, ax = plt.subplots(2, 2)
+
+            ax[0, 0].errorbar(log_mass[ithreshold], log_eddrat_threshold[ithreshold],
+                              yerr=np.ones(len(ithreshold)) * 0.3,
+                              uplims=np.ones(len(ithreshold)),
+                              xerr=0.04, linestyle='none', marker='.', markersize=1, alpha=0.15,
+                              linewidth=1, color='black', zorder=1,
+                              label=r'{\rm AGN Detection Thresholds}')
+            
+            ax[0, 0].scatter(log_mass[iagn], log_eddrat[iagn], alpha=1.0, color='red', s=40,
+                             zorder=2, label=r'{\rm AGN Detections}')
+            ax[0, 0].set_xlabel(r'$\log_{10} {\rm~Stellar~Mass~(}M_\odot{\rm )}$')
+            ax[0, 0].set_ylabel(ylabel)
+            
+            ax[0, 0].set_xlim([8.9, 12.5])
+            ax[0, 0].set_ylim([-4.8, 1.1])
+            
+            ax[0, 1].errorbar(log_vdisp[ithreshold], log_eddrat_threshold[ithreshold],
+                              yerr=np.ones(len(ithreshold)) * 0.3,
+                              uplims=np.ones(len(ithreshold)),
+                              xerr=0.04, linestyle='none', marker='.', markersize=1, alpha=0.15,
+                              linewidth=1, color='black', zorder=1,
+                              label=r'{\rm AGN Detection Thresholds}')
+            
+            ax[0, 1].scatter(log_vdisp[iagn], log_eddrat[iagn], alpha=1.0, color='red', s=40,
+                             zorder=2, label=r'{\rm AGN Detections}')
+            ax[0, 1].set_xlabel(r'$\log_{10} \sigma_v {\rm (km~s}^{-1}{\rm )}$')
+            ax[0, 1].set_ylabel(ylabel)
+            
+            ax[0, 1].set_xlim([1.7, 2.8])
+            ax[0, 1].set_ylim([-4.8, 1.1])
+            
+            ax[1, 0].errorbar(log_sfr[ithreshold], log_eddrat_threshold[ithreshold],
+                              yerr=np.ones(len(ithreshold)) * 0.3,
+                              uplims=np.ones(len(ithreshold)),
+                              xerr=0.04, linestyle='none', marker='.', markersize=1, alpha=0.15,
+                              linewidth=1, color='black', zorder=1,
+                              label=r'{\rm AGN Detection Thresholds}')
+            
+            ax[1, 0].scatter(log_sfr[iagn], log_eddrat[iagn], alpha=1.0, color='red', s=40,
+                             zorder=2, label=r'{\rm AGN Detections}')
+            ax[1, 0].set_xlabel(r'$\log_{10} {\rm~SFR~(}M_\odot{\rm ~yr}^{-1}{\rm )}$')
+            ax[1, 0].set_ylabel(ylabel)
+            
+            ax[1, 0].set_xlim([-2., 1.9])
+            ax[1, 0].set_ylim([-4.8, 1.1])
+            
+            ax[1, 1].errorbar(log_ssfr[ithreshold], log_eddrat_threshold[ithreshold],
+                              yerr=np.ones(len(ithreshold)) * 0.3,
+                              uplims=np.ones(len(ithreshold)),
+                              xerr=0.04, linestyle='none', marker='.', markersize=1, alpha=0.15,
+                              linewidth=1, color='black', zorder=1,
+                              label=r'{\rm AGN Detection Thresholds}')
+    
+            ax[1, 1].scatter(log_ssfr[iagn], log_eddrat[iagn], alpha=1.0, color='red', s=40,
+                             zorder=2, label=r'{\rm AGN Detections}')
+            ax[1, 1].set_xlabel(r'$\log_{10} {\rm~sSFR~(yr}^{-1}{\rm )}$')
+            ax[1, 1].set_ylabel(ylabel)
+            
+            ax[1, 1].set_xlim([-13.8, -9.3])
+            ax[1, 1].set_ylim([-4.8, 1.1])
+            
+            ax[1, 1].legend()
+            
+            plt.tight_layout()
+
+            pngfile = os.path.join(os.getenv('MNSA_DATA'),
+                                   version + '.analysis', 'agn',
+                                   'jiyan' + altname, 'jiyan-thresholds-ssfr-{m}-{b}-{v}.png')
+            pngfile = pngfile.format(v=version, m=mbhv, b=bolov)
+            if(dr17):
+                pngfile = pngfile.replace('jiyan-thresholds-', 'jiyan-thresholds-dr17-')
+            if(test is not None):
+                pngfile = pngfile.replace('jiyan-thresholds', 'jiyan-thresholds-{t}'.format(t=test))
+            plt.savefig(pngfile, dpi=150)
+            subprocess.run(['convert', pngfile, '-trim', pngfile])
+            

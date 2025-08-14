@@ -177,7 +177,7 @@ if __name__ == '__main__':
     fitsio.write(outfile, mass_bin_edges, extname='MASS_BIN_EDGES', clobber=False)
     fitsio.write(outfile, ssfr_bin_edges, extname='SSFR_BIN_EDGES', clobber=False)
     fitsio.write(outfile, log_Fagn, extname='LOG_FAGN', clobber=False)
-    fitsio.write(outfile, log_Fagn_std, extname='LOG_FAGN_STD', clobber=False)
+    # fitsio.write(outfile, log_Fagn_std, extname='LOG_FAGN_STD', clobber=False)
     fitsio.write(outfile, log_Fagn_low, extname='LOG_FAGN_LOW', clobber=False)
     fitsio.write(outfile, log_Fagn_high, extname='LOG_FAGN_HIGH', clobber=False)
     

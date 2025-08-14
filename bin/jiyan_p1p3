@@ -1,0 +1,191 @@
+#!/usr/bin/env python
+
+# Plot images on P1-P3 space grid
+
+import os
+import sys
+import subprocess
+import argparse
+import numpy as np
+import scipy.ndimage
+import matplotlib
+import matplotlib.pyplot as plt
+import fitsio
+import mnsa.mnsa
+import mnsa.imagetypes
+
+
+matplotlib.rcParams['figure.figsize'] = [8., 6.]
+matplotlib.rcParams['font.size'] = 24
+matplotlib.rcParams['text.usetex'] = True
+
+
+imagetypes = mnsa.imagetypes.ImageTypes()
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(
+        prog=os.path.basename(sys.argv[0]),
+        description='Make color grid')
+
+    parser.add_argument('-v', '--version', dest='version',
+                        type=str, default='0.3.2',
+                        help='MNSA configuration version')
+
+    parser.add_argument('-a', '--agn', dest='agn',
+                        default=False,
+                        action='store_true',
+                        help='show AGN classification box')
+
+    parser.add_argument('-t', '--test', dest='test',
+                        required=False, help='test',
+                        action='store_true',
+                        default=False)
+
+    parser.add_argument('-p', '--plateifu', dest='plateifu',
+                        required=False, help='plateifu to overplot',
+                        type=str, default=None)
+
+    parser.add_argument('-f', '--full', dest='full',
+                        required=False, help='plot all not just main',
+                        action='store_true',
+                        default=False)
+
+    args = parser.parse_args()
+    version = args.version
+    agn = args.agn
+    test = args.test
+    plot_all = args.full
+    overplot_plateifu = args.plateifu
+
+    jyfile = os.path.join(os.getenv('MNSA_DATA'), version + '.analysis',
+                          'agn', 'jiyan',
+                          'jiyan-agn-{version}.fits'.format(version=version))
+    if(test):
+        jyfile = jyfile.replace('jiyan-agn', 'jiyan-agn-test')
+    jiyan = fitsio.read(jyfile)
+
+    summary = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
+                                       '{v}', 'mnsa-{v}.fits').format(v=version),
+                          ext='SUMMARY')
+
+    pipe3d = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
+                                      '{v}', 'mnsa-{v}.fits').format(v=version),
+                         ext='PIPE3D')
+    log_ssfr = pipe3d['log_SFR_D_C'] - pipe3d['log_Mass']
+    log_mass = pipe3d['log_Mass']
+
+    good = (jiyan['good'] > 0)
+    isagn = (jiyan['isagn'] > 0)
+    mainbits = (2**10 | 2**11 | 2**12)
+    ismain = (((summary['mngtarg1'] & mainbits) != 0) &
+              (summary['esrweight'] > 0.)) | plot_all
+    detected = jiyan['detected']
+
+    keep = (detected & good & ismain)
+
+    log_ssfr = log_ssfr[keep]
+    log_mass = log_mass[keep]
+    plateifu = jiyan['plateifu'][keep]
+    p1 = jiyan['p1'][keep]
+    p2 = jiyan['p2'][keep]
+    p3 = jiyan['p3'][keep]
+    p1_err = jiyan['p1_err'][keep]
+    p2_err = jiyan['p2_err'][keep]
+    p3_err = jiyan['p3_err'][keep]
+
+    nx = 40
+    ny = 30
+
+    xmin = - 1.25
+    xmax = 0.9
+    ymin = - 0.3
+    ymax = 1.35
+    xbin = np.int32(nx * (p1 - xmin) / (xmax - xmin))
+    ybin = np.int32(ny * (p3 - ymin) / (ymax - ymin))
+    inbin = ((xbin >= 0) & (xbin < nx) & (ybin >= 0) & (ybin < ny))
+
+    dist = np.zeros((ny, nx), dtype=np.float32)
+    for xb, yb in zip(xbin[inbin], ybin[inbin]):
+        dist[yb, xb] = dist[yb, xb] + 1.
+    dist = np.arcsinh(scipy.ndimage.gaussian_filter(dist, 0.75))
+
+    if(overplot_plateifu is not None):
+        m = mnsa.mnsa.MNSA(version=version, plateifu=overplot_plateifu)
+        pngdir = m.png_dir
+        pngbase = m.png_base
+    else:
+        pngdir = os.path.join(os.getenv('MNSA_DATA'),
+                              '{v}.analysis'.format(v=version),
+                              'agn', 'jiyan')
+
+    fig, ax = plt.subplots()
+
+    kk = np.where((log_ssfr > -13) & (log_ssfr < -11.))[0]
+    ax.scatter(p1[kk], p3[kk], color='black', s=10, alpha=0.18)
+    ax.errorbar(p1[kk], p3[kk], xerr=p1_err[kk], yerr=p3_err[kk], color='black', fmt='none',
+                alpha=0.15, linewidth=1, zorder=3)
+    kk = np.where((log_ssfr > -11))[0]
+    ax.scatter(p1[kk], p3[kk], color='blue', s=10, alpha=0.18)
+    ax.errorbar(p1[kk], p3[kk], xerr=p1_err[kk], yerr=p3_err[kk], color='blue', fmt='none',
+                alpha=0.15, linewidth=1, zorder=1)
+    kk = np.where(log_ssfr < -13)[0]
+    ax.scatter(p1[kk], p3[kk], color='red', s=10, alpha=0.18)
+    ax.errorbar(p1[kk], p3[kk], xerr=p1_err[kk], yerr=p3_err[kk], color='red', fmt='none',
+                alpha=0.15, linewidth=1, zorder=2)
+    levels = dist.max() * np.array([0.5, 0.7, 0.87, 0.93])
+    ax.contour(dist, origin='lower', extent=[xmin, xmax, ymin, ymax],
+               colors='black', levels=levels, alpha=0.6, linewidths=2, zorder=5)
+
+    if(overplot_plateifu is not None):
+        ll = np.where(plateifu == overplot_plateifu)[0]
+        if(len(ll) == 0):
+            sys.exit()
+        ll = ll[0]
+        if(log_ssfr[ll] < -13.):
+            color = 'red'
+        elif(log_ssfr[ll] > -11.):
+            color = 'blue'
+        else:
+            color = 'black'
+        ax.scatter(p1[ll], p3[ll], color='white', s=50, alpha=1.0, zorder=10)
+        ax.errorbar(p1[ll], p3[ll], xerr=p1_err[ll], yerr=p3_err[ll], color='white', fmt='none',
+                    alpha=1.00, linewidth=5, zorder=11)
+        ax.scatter(p1[ll], p3[ll], color=color, s=30, alpha=1.0, zorder=12)
+        ax.errorbar(p1[ll], p3[ll], xerr=p1_err[ll], yerr=p3_err[ll], color=color, fmt='none',
+                    alpha=1.00, linewidth=2, zorder=13)
+
+    if(agn):
+        ax.add_patch(matplotlib.patches.Rectangle((- 0.3, 0.55), 5, 5, alpha=0.3, edgecolor='darkblue'))
+        ax.plot([- 0.3, 5], [0.55, 0.55], linewidth=2, color='blue', alpha=0.5)
+        ax.plot([- 0.3, - 0.3], [-5., 5.], linewidth=2, color='blue', alpha=0.5)
+        xseyfert = xmin + (xmax - xmin) * 0.80
+        yseyfert = ymin + (ymax - ymin) * 0.92
+        plt.text(xseyfert, yseyfert, r'{\it Seyferts}',
+                 bbox=dict(facecolor='white', alpha=0.6, boxstyle='round'))
+        xliner = xmin + (xmax - xmin) * 0.80
+        yliner = ymin + (ymax - ymin) * 0.06
+        plt.text(xliner, yliner, r'{\it LINERs}',
+                 bbox=dict(facecolor='white', alpha=0.6, boxstyle='round'))
+        xsf = xmin + (xmax - xmin) * 0.02
+        ysf = ymin + (ymax - ymin) * 0.92
+        plt.text(xsf, ysf, r'{\it Star formers}',
+                 bbox=dict(facecolor='white', alpha=0.6, boxstyle='round'))
+
+    ax.set_xlim([xmin, xmax])
+    ax.set_ylim([ymin, ymax])
+    ax.set_xlabel(r'${\rm P1} = 0.63 {\rm N2} + 0.51 {\rm S2} + 0.59 {\rm R3}$', fontsize=22)
+    ax.set_ylabel(r'${\rm P3} = -0.46 {\rm N2} - 0.37 {\rm S2} + 0.81 {\rm R3}$', fontsize=22)
+    fig.tight_layout()
+
+    if(overplot_plateifu is None):
+        pngfile = os.path.join(pngdir,
+                               'jiyan-p1p3-{v}.png'.format(v=version))
+        if(test):
+            pngfile = pngfile.replace('jiyan-p1p3', 'jiyan-test-p1p3')
+    else:
+        pngfile = os.path.join(pngdir,
+                               '{b}-p1p3.png'.format(b=pngbase))
+
+    plt.savefig(pngfile, dpi=150)
+    subprocess.run(['convert', pngfile, '-trim', pngfile])

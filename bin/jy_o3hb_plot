@@ -1,0 +1,136 @@
+#!/usr/bin/env python
+# encoding: utf-8
+
+
+import os
+import sys
+import subprocess
+import argparse
+import matplotlib.pyplot as plt
+import matplotlib.patches
+import matplotlib
+import fitsio
+import numpy as np
+import mnsa
+import magn
+import magn.jiyan
+import magn.agn
+import mnsa.mnsautils
+
+matplotlib.rcParams['font.size'] = 32
+matplotlib.rcParams['figure.figsize'] = [12., 12.]
+matplotlib.rcParams['text.usetex'] = True
+
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(
+        prog=os.path.basename(sys.argv[0]),
+        description='Select Ji and Yan-style AGN.')
+
+    parser.add_argument('-v', '--version', dest='version',
+                        type=str, default='0.3.2',
+                        help='MNSA configuration version')
+
+    parser.add_argument('-o', '--old', dest='dr17',
+                        required=False, help='dr17',
+                        action='store_true',
+                        default=False)
+
+    args = parser.parse_args()
+    version = args.version
+    dr17 = args.dr17
+
+    print("Reading data", flush=True)
+
+    summary = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
+                                       '{v}', 'mnsa-{v}.fits').format(v=version),
+                          ext='SUMMARY')
+    pipe3d = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
+                                      '{v}', 'mnsa-{v}.fits').format(v=version),
+                         ext='PIPE3D')
+
+    agnfile = os.path.join(os.getenv('MNSA_DATA'),
+                           version + '.analysis', 'agn',
+                           'jiyan', 'jiyan-agn-{v}.fits')
+    if(dr17):
+        agnfile = agnfile.replace('agn-', 'agn-dr17-')
+    agnfile = agnfile.format(v=version)
+    agn = fitsio.read(agnfile)
+
+    paramsfile = os.path.join(os.getenv('MNSA_DATA'),
+                           version + '.analysis', 'agn',
+                           'jiyan', 'jiyan-agn-params-{v}.fits')
+    if(dr17):
+        paramsfile = paramsfile.replace('agn-', 'agn-dr17-')
+    paramsfile = paramsfile.format(v=version)
+    params = fitsio.read(paramsfile, ext='PARAMS')
+    mbhvs = fitsio.read(paramsfile, ext='MBH_VERSIONS')
+    bolovs = fitsio.read(paramsfile, ext='BOLO_VERSIONS')
+
+    good = (agn['good']) & (params['vdisp'] > 60.)
+                
+    log_sfr = pipe3d['log_SFR_ssp'][good]
+    log_mass = pipe3d['log_Mass'][good]
+    log_ssfr = log_sfr - log_mass
+    log_vdisp = np.log10(params['vdisp'][good])
+    log_hb_corr_threshold = agn['log_luminosity_hb_corr_threshold'][good]
+    log_hb_corr = agn['log_luminosity_hb_corr'][good]
+    log_o3_threshold = agn['log_luminosity_o3_threshold'][good]
+    log_o3 = agn['log_luminosity_o3'][good]
+    log_o3_corr_threshold = agn['log_luminosity_o3_corr_threshold'][good]
+    log_o3_corr = agn['log_luminosity_o3_corr'][good]
+
+    isagn = agn['isagn'][good]
+    iagn = np.where(isagn == True)[0]
+    ithreshold = np.where(isagn == False)[0]
+
+    fig, ax = plt.subplots()
+
+    ylabel = r'$\log_{10} L({\rm H}\beta)_{\rm corr} / L({\rm [O{\textsc{III}]}})$'
+    xlabel = r'$\log_{10} L({\rm H}\beta / {\rm ~ergs~s}^{-1})_{\rm corr}$'
+
+    print("Median log ratio of corrected Hb to uncorrected OIII: {r}".format(r=np.median(log_hb_corr[iagn] - log_o3[iagn])))
+    
+    ax.scatter(log_hb_corr[iagn], log_hb_corr[iagn] - log_o3[iagn],
+               alpha=1.0, color='red', s=40,
+               zorder=2, label=r'{\rm AGN Detections}')
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    
+    ax.set_xlim([37, 43.])
+    ax.set_ylim([-3., 3.])
+    
+    plt.tight_layout()
+    
+    pngfile = os.path.join(os.getenv('MNSA_DATA'),
+                           version + '.analysis', 'agn',
+                           'jiyan', 'jiyan-o3-hbcorr-{v}.png')
+    pngfile = pngfile.format(v=version)
+    plt.savefig(pngfile, dpi=150)
+    subprocess.run(['convert', pngfile, '-trim', pngfile])
+
+    fig, ax = plt.subplots()
+
+    ylabel = r'$\log_{10} L({\rm H}\beta)_{\rm corr} / L({\rm [O{\textsc{III}]}})_{\rm corr}$'
+    xlabel = r'$\log_{10} L({\rm H}\beta / {\rm ~ergs~s}^{-1})_{\rm corr}$'
+
+    print("Median log ratio of corrected Hb to corrected OIII: {r}".format(r=np.median(log_hb_corr[iagn] - log_o3_corr[iagn])))
+    
+    ax.scatter(log_hb_corr[iagn], log_hb_corr[iagn] - log_o3_corr[iagn],
+               alpha=1.0, color='red', s=40,
+               zorder=2, label=r'{\rm AGN Detections}')
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    
+    ax.set_xlim([37, 43.])
+    ax.set_ylim([-3., 3.])
+    
+    plt.tight_layout()
+    
+    pngfile = os.path.join(os.getenv('MNSA_DATA'),
+                           version + '.analysis', 'agn',
+                           'jiyan', 'jiyan-o3corr-hbcorr-{v}.png')
+    pngfile = pngfile.format(v=version)
+    plt.savefig(pngfile, dpi=150)
+    subprocess.run(['convert', pngfile, '-trim', pngfile])

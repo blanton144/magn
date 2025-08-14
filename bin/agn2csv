@@ -1,0 +1,58 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import argparse
+import numpy as np
+import fitsio
+
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(
+        prog=os.path.basename(sys.argv[0]),
+        description='Fit Schechter to full Jiyan sample')
+
+    parser.add_argument('-v', '--version', dest='version',
+                        type=str, default='0.3.2',
+                        help='MNSA configuration version')
+
+    parser.add_argument('-o', '--old', dest='dr17',
+                        required=False, help='dr17',
+                        action='store_true',
+                        default=False)
+
+    parser.add_argument('-t', '--test', dest='test',
+                        type=str, default=None, required=False,
+                        help='test name')
+    
+    args = parser.parse_args()
+    version = args.version
+    dr17 = args.dr17
+    test = args.test
+
+    summary = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
+                                       '{v}', 'mnsa-{v}.fits').format(v=version),
+                          ext='SUMMARY')
+
+    agndir = os.path.join(os.getenv('MNSA_DATA'), version + '.analysis', 'agn', 'jiyan')
+    agnfile = os.path.join(agndir, 'jiyan-agn-{v}.fits')
+    if(dr17):
+        agnfile = agnfile.replace('agn-', 'agn-dr17-')
+    if(test):
+        agnfile = agnfile.replace('agn-', 'agn-{t}-'.format(t=test))
+    agnfile = agnfile.format(v=version)
+    agn = fitsio.read(agnfile)
+
+    good = (agn['good'] > 0)
+    isagn = (agn['isagn'] > 0)
+    mainbits = (2**10 | 2**11 | 2**12)
+    ismain = (((summary['mngtarg1'] & mainbits) != 0) &
+              (summary['esrweight'] > 0.))
+
+    iagn = np.where(good & isagn & ismain)[0]
+            
+    print("ra,dec")
+    for i in iagn:
+        print("{r},{d}".format(r=summary['ifura'][i], d=summary['ifudec'][i]))
+    

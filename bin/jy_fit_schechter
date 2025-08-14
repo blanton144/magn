@@ -1,0 +1,56 @@
+#!/usr/bin/env python
+
+
+class 
+def ln_p_sch(theta): # Likelihood Function
+
+    alpha_0 = theta[0]
+    beta = theta[1]
+    lambda_star = theta[2]
+    log_lambda_min = theta[3]
+    
+    alphas_agn = alpha_prop(alpha_0, prop_agn, beta, model_type)
+
+    inds_alp_lt_1 = np.where(alphas_agn < 1)
+		    inds_alp_gt_1 = np.where(alphas_agn > 1)
+
+    norms_agn = np.ones(len(alphas_agn))
+
+    norms_agn[inds_alp_gt_1] = 1/(total_integral(log_lambda_min,2.2,alphas_agn[inds_alp_gt_1],
+		    lambda_star,correction_integ_obj))
+				    norms_agn[inds_alp_lt_1] = 1/(gamma_integ(log_lambda_min,2.2,alphas_agn[inds_alp_lt_1],
+						    lambda_star))
+
+    likelihoods_agn = norms_agn*schechter_prop(lambda_agn,
+		    prop_agn,alpha_0,beta,lambda_star,model_type)
+
+    ln_likelihood = (volw_agn*np.log(likelihoods_agn)).sum()
+
+    alphas_non_agn = alpha_prop(alpha_0,prop_non_agn,beta,model_type)
+		    norms_non_agn = np.ones(len(alphas_non_agn))
+
+    inds_alps_lt_1 = np.where(alphas_non_agn < 1)
+		    inds_alps_gt_1 = np.where(alphas_non_agn > 1)
+
+    volw_non_agn_alps_lt_1 = volw_non_agn[inds_alps_lt_1]
+		    volw_non_agn_alps_gt_1 = volw_non_agn[inds_alps_gt_1]
+
+    norms_non_agn[inds_alps_gt_1] = 1/(total_integral(log_lambda_min,2.2,alphas_non_agn[inds_alps_gt_1],
+		    lambda_star,correction_integ_obj))
+				    norms_non_agn[inds_alps_lt_1] = 1/(gamma_integ(log_lambda_min,2.2,alphas_non_agn[inds_alps_lt_1],
+						    lambda_star))
+
+    likelihoods_alps_gt_1 = norms_non_agn[inds_alps_gt_1]*total_integral(log_lambda_min,
+		    np.log10(lambda_lim_non_agn[inds_alps_gt_1]),alphas_non_agn[inds_alps_gt_1],lambda_star,correction_integ_obj)
+
+
+    likelihoods_alps_lt_1 = norms_non_agn[inds_alps_lt_1]*gamma_integ(log_lambda_min,
+		    np.log10(lambda_lim_non_agn[inds_alps_lt_1])
+				    ,alphas_non_agn[inds_alps_lt_1],lambda_star)
+
+    ln_likelihood = ln_likelihood + (volw_non_agn_alps_gt_1*np.log(
+		    likelihoods_alps_gt_1)).sum() + (volw_non_agn_alps_lt_1*np.log(likelihoods_alps_lt_1)).sum()
+
+    print(ln_likelihood)
+
+    return -ln_likelihood

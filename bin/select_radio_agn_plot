@@ -1,0 +1,108 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import subprocess
+import argparse
+import numpy as np
+import fitsio
+import matplotlib
+import matplotlib.pyplot as plt
+import mnsa.mnsautils
+
+matplotlib.rcParams['figure.figsize'] = [8., 5.]
+matplotlib.rcParams['font.size'] = 22
+matplotlib.rcParams['text.usetex'] = True
+
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(
+        prog=os.path.basename(sys.argv[0]),
+        description='Plot selected radio AGN')
+
+    parser.add_argument('-v', '--version', dest='version',
+                        type=str, default='0.3.2',
+                        help='MNSA configuration version')
+
+    args = parser.parse_args()
+    version = args.version
+
+    print("Reading catalog", flush=True)
+    done = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
+                                    '{v}.analysis', 'mnsa-done-{v}.fits').format(v=version))
+    drpall = fitsio.read(os.path.join(os.getenv('MNSA_DATA'),
+                                      '{v}', 'manga', 'redux', '{v}',
+                                      'drpall-{v}.fits').format(v=version))
+
+    agnfile = os.path.join(os.getenv('MNSA_DATA'),
+                           version + '.analysis', 'agn',
+                           'radio', 'VAC.fits')
+    agnfile = agnfile.format(v=version)
+    agn = fitsio.read(agnfile)
+
+    iradio = np.where(agn['log_Lr'] > 0)[0] 
+    iupper = np.where((agn['log_Lr'] < 0) & (agn['nsa_redshift'] > 0))[0]
+    
+    loglr_radio = agn['log_Lr'][iradio]
+    logsfr_radio = agn['log_sfr_ssp'][iradio]
+    
+    log_flimit = np.log10(1.4 * 2.5) + 9. - 3. - 23.# flux limit in erg/cm^2/s
+    logsfr_upper = agn['log_sfr_ssp'][iupper]
+    logterm = mnsa.mnsautils.log_flux_to_luminosity(agn['nsa_redshift'][iupper]) + 17.
+    loglr_upper = log_flimit + logterm
+
+    print(logsfr_upper)
+    print(loglr_upper)
+
+    fig, ax = plt.subplots()
+
+    ax.errorbar(logsfr_upper, loglr_upper,
+                yerr=np.ones(len(logsfr_upper)) * 0.3,
+                uplims=np.ones(len(logsfr_upper)),
+                xerr=0.02, linestyle='none', marker='.', markersize=1, alpha=0.03,
+                linewidth=1, color='black', zorder=1)
+
+    ax.errorbar([], [],
+                yerr=np.ones(0) * 0.3,
+                uplims=np.ones(0),
+                xerr=0.02, linestyle='none', marker='.', markersize=1, alpha=0.3,
+                linewidth=1, color='black', zorder=1,
+                label=r'{\rm Radio detection thresholds}')
+
+    ax.scatter(logsfr_radio, loglr_radio, s=8, alpha=0.95, color='black',
+               zorder=2, label=r'{\rm Radio detections}')
+
+    ax.plot([-5., 0., 5.], [38.6, 38.6, 43.6], linewidth=3, color='black',
+            alpha=0.4, zorder=3)
+    
+    #ax.scatter(logssfr[iagn], w1w2[iagn], s=12, alpha=0.6, color='red',
+    #           label=r'{\rm MaNGA mid-IR AGN}')
+
+    #ngrid = 10000
+    #logssfr_grid = -15. + (-8. - (- 15.)) * np.arange(ngrid) / np.float32(ngrid - 1)
+    #w1w2_grid = magn.midir.w1w2_interp(logssfr_grid)
+    #plt.plot(logssfr_grid, w1w2_grid, linestyle='dotted', linewidth=1,
+    #         alpha=0.6, color='red')
+
+    ax.set_xlim([-2.2, 1.9])
+    ax.set_ylim([36.6, 42.8])
+    ax.set_xlabel(r'{\rm SFR from stellar populations (}$M_\odot${\rm ~yr}$^{-1}${\rm )}')
+    ax.set_ylabel(r'$\log_{10} \nu L_\nu {\rm (erg s}^{-1}{\rm )}$')
+    ax.legend(fontsize=16, loc=2)
+
+    plt.text(0.5, 41.9, r'{\it AGN}', va='bottom', ha='left', fontsize=20,
+             bbox=dict(facecolor='white', edgecolor='grey', alpha=0.6, boxstyle='round'),
+             color='grey')
+
+    plt.text(1.5, 38., r'{\it SF}', va='bottom', ha='left', fontsize=20,
+             bbox=dict(facecolor='white', edgecolor='grey', alpha=0.6, boxstyle='round'),
+             color='grey')
+
+    plt.tight_layout()
+
+    pngfile = os.path.join(os.getenv('MNSA_DATA'),
+                           version + '.analysis', 'agn', 'radio',
+                           'radio-agn-{v}.png').format(v=version)
+    plt.savefig(pngfile, dpi=300)
+    subprocess.run(['convert', pngfile, '-trim', pngfile])
